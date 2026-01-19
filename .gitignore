@@ -1,0 +1,29 @@
+# IDE specific files
+.idea/
+*.iml
+
+# Environment
+.venv/
+venv/
+env/
+.env
+
+# Python specific files
+*.pyc
+__pycache__/
+*.so
+
+# Coursework and project files
+*.pdf
+project_outline.md
+*.zip
+
+# Data files (if they are large and shouldn't be in git)
+# Data/
+
+# Other
+.DS_Store
+*.ipynb_checkpoints
+build/
+dist/
+*.egg-info/
