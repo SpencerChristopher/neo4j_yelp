@@ -16,8 +16,6 @@ services:
       NEO4J_apoc_import_file_use__neo4j__config: "true"
       # Install APOC and Graph Data Science plugins
       NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
-      # Enable database discovery (useful for client connections)
-      NEO4J_db_discovery_enabled: "true"
       # JVM options (optional, adjust based on available memory)
       NEO4J_dbms_memory_heap_max__size: "1G"
       NEO4J_dbms_memory_heap_initial__size: "512M"
