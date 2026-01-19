@@ -26,6 +26,12 @@ services:
       - ./neo4j/logs:/logs # Optional: for easier log access
       - ./neo4j/import:/var/lib/neo4j/import # Optional: for data import, mounted to current directory
     restart: unless-stopped # Keep Neo4j running unless manually stopped
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p password 'RETURN 1' || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
 
 volumes:
   neo4j-data: # Named volume for persistent Neo4j data
