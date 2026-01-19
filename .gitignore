@@ -19,7 +19,7 @@ project_outline.md
 *.zip
 
 # Data files (if they are large and shouldn't be in git)
-# Data/
+Data/
 
 # Other
 .DS_Store
@@ -27,3 +27,4 @@ project_outline.md
 build/
 dist/
 *.egg-info/
+*.log
