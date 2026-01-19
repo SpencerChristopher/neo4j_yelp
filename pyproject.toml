@@ -9,6 +9,8 @@ license = {text = "MIT"}
 readme = "README.md"
 requires-python = "^3.10"
 dependencies = [
+    "pandas (>=2.3.3,<3.0.0)",
+    "geopandas (>=1.1.2,<2.0.0)"
 ]
 
 
