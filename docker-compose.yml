@@ -17,12 +17,12 @@ services:
       # Install APOC and Graph Data Science plugins
       NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
       # JVM options (optional, adjust based on available memory)
-      NEO4J_dbms_memory_heap_max__size: "1G"
-      NEO4J_dbms_memory_heap_initial__size: "512M"
+      NEO4J_dbms_memory_heap_max_size: "2G" # Increased example memory for larger datasets
+      NEO4J_dbms_memory_heap_initial_size: "1G" # Increased example memory
     volumes:
-      - neo4j-data:/data
+      - ./Data:/var/lib/neo4j/import:ro # Read-only mount for data safety, as per plan
+      - neo4j-data:/data # Persistent storage for Neo4j data
       - ./neo4j/logs:/logs # Optional: for easier log access
-      - ./neo4j/import:/var/lib/neo4j/import # Optional: for data import, mounted to current directory
     restart: unless-stopped # Keep Neo4j running unless manually stopped
     healthcheck:
       test: ["CMD-SHELL", "cypher-shell -u ${NEO4J_USER} -p ${NEO4J_PASSWORD} 'RETURN 1' || exit 1"]
