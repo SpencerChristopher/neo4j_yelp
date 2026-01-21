@@ -30,3 +30,11 @@ package-mode = false
 
 [tool.poetry.group.dev.dependencies]
 notebook = "^7.5.2"
+pytest = "^9.0.2" # Added for testing
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "--strict-markers --strict-config" # Recommended best practices
+
+pytest = "^9.0.2"
