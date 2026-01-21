@@ -18,7 +18,7 @@ services:
 
       # Install APOC and Graph Data Science plugins
       NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
-
+       # NEO4J_dbms_transaction_timeout=60s # confrim needed for eld missing on review
       # Corrected Memory settings for Neo4j 5.x
       # Naming rule: 'server.memory.heap.max.size' -> 'NEO4J_server_memory_heap_max__size'
       NEO4J_server_memory_heap_max__size: "2G"
