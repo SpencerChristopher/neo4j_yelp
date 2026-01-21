@@ -27,22 +27,22 @@ def health_check():
 
         with driver.session() as session:
             # Get Neo4j Version and Edition
-            result = session.run("CALL dbms.components() YIELD name, version, edition RETURN name, version, edition").single()
+            result = session.run("CALL dbms.components() YIELD name, versions, edition RETURN name, versions, edition").single()
             if result:
                 print("\nNeo4j Instance Details:")
-                print(f"   - {result['name']} Version: {result['version']}")
+                print(f"   - {result['name']} Version: {result['versions'][0]}") # versions is a list, take the first
                 print(f"   - Edition: {result['edition']}")
 
             # Get Installed Plugins (APOC & GDS)
             plugin_result = session.run("""
-                CALL dbms.procedures() YIELD name 
-                WHERE name STARTS WITH 'apoc' OR name STARTS WITH 'gds' 
-                RETURN collect(DISTINCT split(name, '.')) AS plugins
+                SHOW PROCEDURES YIELD name 
+                WHERE name STARTS WITH 'apoc.' OR name STARTS WITH 'gds.' 
+                RETURN collect(DISTINCT split(name, '.')[0]) AS plugins
             """).single()
             if plugin_result and plugin_result['plugins']:
                 print("\nInstalled Plugins:")
                 for plugin in sorted(plugin_result['plugins']):
-                    print(f"   - {plugin[0]}")
+                    print(f"   - {plugin}")
             else:
                 print("\nWarning: Could not detect APOC or GDS plugins.")
 
