@@ -13,18 +13,18 @@ class Business(BaseModel):
     name: str
 
     # Address (minimum viable location)
-    address: Optional[str] = None        # street-level (optional)
-    city: Optional[str] = None
-    state: str                            # REQUIRED
-    postal_code: Optional[str] = None
+    address: Optional[str] = None        ###! Can be removed
+    city: Optional[str] = None ### node should have state + (city or post_code)
+    state: str
+    postal_code: Optional[str] = None  
 
     # Geospatial observation
     location: Optional[Location] = None
 
     # Observational metrics (non-identity)
     stars: Optional[confloat(ge=0.0, le=5.0)] = None
-    review_count: Optional[conint(ge=0)] = None
-    is_open: Optional[conint(ge=0, le=1)] = None
+    review_count: Optional[conint(ge=0)] = None #must be int
+    is_open: Optional[conint(ge=0, le=1)] = None #Review should be boolean 1 or 0
 
     # -----------------------------
     # Structural validators only
@@ -63,6 +63,7 @@ class Business(BaseModel):
         Enforces:
         - state is required
         - at least one of city or postal_code must exist
+        ### REQUIRED MINIMUM LOCATION LOCATION MODE (State and city) or postal_code
         """
         if not (self.city or self.postal_code):
             raise ValueError(
