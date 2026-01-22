@@ -13,10 +13,10 @@ class Business(BaseModel):
     name: str
 
     # Address (minimum viable location)
-    address: Optional[str] = None        ###! Can be removed
+
     city: Optional[str] = None ### node should have state + (city or post_code)
     state: str
-    postal_code: Optional[str] = None  
+    postal_code: Optional[conint(ge=501, le=99950)] = None  
 
     # Geospatial observation
     location: Optional[Location] = None
@@ -60,14 +60,15 @@ class Business(BaseModel):
     @model_validator(mode="after")
     def require_minimum_location(self):
         """
-        Enforces:
-        - state is required
-        - at least one of city or postal_code must exist
-        ### REQUIRED MINIMUM LOCATION LOCATION MODE (State and city) or postal_code
+        Enforces that a business has a valid minimum location, which consists of:
+        - A mandatory 'state'.
+        - At least one of 'city' or 'postal_code'.
         """
+        # 'state' is already enforced by its type hint 'str'.
+        # This validator checks the 'city' or 'postal_code' requirement.
         if not (self.city or self.postal_code):
             raise ValueError(
-                "Business must have at least one of: city or postal_code"
+                "A Business must have a 'state' and at least one of 'city' or 'postal_code'."
             )
         return self
 

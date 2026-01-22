@@ -44,7 +44,7 @@ def test_business_model_valid_data(sample_raw_data: List[Dict[str, Any]]):
             logger.info(f"Row {i+1}: Valid Business data successfully validated (business_id={business.business_id}).")
             assert business.city == raw_row['city'].title() if raw_row['city'] else None # Check casing, now city is Optional
             assert business.state == raw_row['state'].upper() # Check casing, state is Required
-            assert business.postal_code == (raw_row['postal_code'] if raw_row['postal_code'] != '' else None) # Check postal_code handling
+            assert business.postal_code == (int(raw_row['postal_code']) if raw_row['postal_code'] not in [None, ''] else None) # Check postal_code handling
             assert business.location.latitude == raw_row['latitude']
             assert business.location.longitude == raw_row['longitude']
         except ValidationError as e:
@@ -146,7 +146,7 @@ def test_business_model_invalid_data(sample_raw_data: List[Dict[str, Any]]):
             elif business_id == "test_bad_state":
                 assert any(err["loc"][0] == "state" and "string_type" in err["type"] for err in e.errors())
             elif business_id == "test_bad_min_location":
-                assert any("value_error" in err["type"] and "Business must have at least one of: city or postal_code" in err["msg"] for err in e.errors())
+                assert any("value_error" in err["type"] and "A Business must have a 'state' and at least one of 'city' or 'postal_code'." in err["msg"] for err in e.errors())
             logger.info(f"Manipulated Test {i+1}: Assertions for specific errors passed.")
         except AssertionError as e:
             pytest.fail(f"Manipulated Test {i+1}: Assertion failed. Error: {e}")
