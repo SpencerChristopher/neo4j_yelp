@@ -51,10 +51,13 @@ def setup_neo4j_database():
                 "CREATE INDEX FOR (r:Review) ON (r.date)",
 
                 # City
-                "CREATE CONSTRAINT FOR (c:City) REQUIRE c.name IS UNIQUE",
+                "CREATE CONSTRAINT FOR (c:City) REQUIRE (c.name, c.state) IS UNIQUE",
 
                 # State
-                "CREATE CONSTRAINT FOR (s:State) REQUIRE s.name IS UNIQUE",
+                "CREATE CONSTRAINT FOR (s:State) REQUIRE s.code IS UNIQUE",
+
+                # PostalCode
+                "CREATE CONSTRAINT FOR (p:PostalCode) REQUIRE p.code IS UNIQUE",
 
                 # Category
                 "CREATE CONSTRAINT FOR (c:Category) REQUIRE c.name IS UNIQUE"
