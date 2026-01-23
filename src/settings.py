@@ -15,6 +15,7 @@ NEO4J_ELT_PASSWORD = os.getenv("NEO4J_ELT_PASSWORD")
 # Data File Paths
 DATA_DIR = "Data"
 BUSINESS_CSV = os.path.join(DATA_DIR, 'business_small.csv')
+BUSINESS_CITY_CSV = os.path.join(DATA_DIR, 'business_city.csv')
 REVIEW_CSV = os.path.join(DATA_DIR, 'review_small.csv')
 USER_CSV = os.path.join(DATA_DIR, 'user_small.csv')
 
