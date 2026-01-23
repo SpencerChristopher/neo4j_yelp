@@ -8,7 +8,7 @@ from src.settings import (
     BUSINESS_CSV,
     BUSINESS_CITY_CSV,
     BATCH_SIZE,
-    DEAD_LETTER_FILE,
+    DEAD_LETTER_FILE, NEO4J_USER,
 )
 
 from src.validator import (
@@ -21,9 +21,16 @@ from src.normalizer import (
     normalize_canonical_city_state_data,
 )
 
-from src.loader import (
-    load_business_batch,
-    load_canonical_city_state_batch,
+from src.loader import Neo4jLoader
+from src.settings import (
+    DATA_DIR,
+    BUSINESS_CSV,
+    BUSINESS_CITY_CSV,
+    BATCH_SIZE,
+    DEAD_LETTER_FILE,
+    NEO4J_URI,
+    NEO4J_ELT_USER,
+    NEO4J_ELT_PASSWORD,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,11 +40,14 @@ logging.basicConfig(level=logging.INFO)
 def run_pipeline():
     logger.info("Starting Yelp ETL pipeline")
 
-    # -------------------------
-    # Dead letter setup
-    # -------------------------
-    os.makedirs(os.path.dirname(DEAD_LETTER_FILE), exist_ok=True)
-    open(DEAD_LETTER_FILE, "w").close()
+    loader = Neo4jLoader(NEO4J_URI, NEO4J_USER, NEO4J_ELT_PASSWORD)
+    try:
+        # -------------------------
+        # Dead letter setup
+        # -------------------------
+        os.makedirs(os.path.dirname(DEAD_LETTER_FILE), exist_ok=True)
+        open(DEAD_LETTER_FILE, "w").close()
+
 
     # ==========================================================
     # PHASE 1 — Canonical City / State Skeleton
@@ -57,11 +67,9 @@ def run_pipeline():
 
         cities, states, rels = normalize_canonical_city_state_data(valid)
 
-        load_canonical_city_state_batch(
-            cities=cities,
-            states=states,
-            relationships=rels,
-        )
+        loader.load_states(states)
+        loader.load_cities(cities)
+        loader.create_relationships(rels) # Assuming 'rels' is correctly formatted for create_relationships
 
     logger.info("PHASE 1 complete")
 
@@ -87,14 +95,14 @@ def run_pipeline():
             postal_claims,
         ) = normalize_business_data(valid)
 
-        load_business_batch(
-            businesses=business_nodes,
-            city_claims=city_claims,
-            postal_claims=postal_claims,
-        )
+        loader.load_businesses(business_nodes)
+        loader.create_relationships(city_claims) # Assuming 'city_claims' are correctly formatted relationships
+        loader.create_relationships(postal_claims) # Assuming 'postal_claims' are correctly formatted relationships
 
     logger.info("PHASE 2 complete")
     logger.info("ETL pipeline finished successfully")
+    finally:
+        loader.close()
 
 
 def _write_dead_letters(records):

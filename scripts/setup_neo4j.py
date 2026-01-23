@@ -36,31 +36,43 @@ def setup_neo4j_database():
             # 2. Create Constraints and Indexes
             print("Admin: Creating unique constraints and indexes...")
             constraints_and_indexes = [
-                # Business
-                "CREATE CONSTRAINT FOR (b:Business) REQUIRE b.business_id IS UNIQUE",
-                "CREATE INDEX FOR (b:Business) ON (b.name)",
-                "CREATE INDEX FOR (b:Business) ON (b.city)",
-                "CREATE INDEX FOR (b:Business) ON (b.state)",
-                
-                # User
-                "CREATE CONSTRAINT FOR (u:User) REQUIRE u.user_id IS UNIQUE",
-                "CREATE INDEX FOR (u:User) ON (u.name)",
 
-                # Review
-                "CREATE CONSTRAINT FOR (r:Review) REQUIRE r.review_id IS UNIQUE",
-                "CREATE INDEX FOR (r:Review) ON (r.date)",
+                # --- Business ---
+                "CREATE CONSTRAINT business_id_unique IF NOT EXISTS "
+                "FOR (b:Business) REQUIRE b.business_id IS UNIQUE",
 
-                # City
-                "CREATE CONSTRAINT FOR (c:City) REQUIRE (c.name, c.state) IS UNIQUE",
+                "CREATE INDEX business_name_idx IF NOT EXISTS "
+                "FOR (b:Business) ON (b.name)",
 
-                # State
-                "CREATE CONSTRAINT FOR (s:State) REQUIRE s.code IS UNIQUE",
+                # --- User ---
+                "CREATE CONSTRAINT user_id_unique IF NOT EXISTS "
+                "FOR (u:User) REQUIRE u.user_id IS UNIQUE",
 
-                # PostalCode
-                "CREATE CONSTRAINT FOR (p:PostalCode) REQUIRE p.code IS UNIQUE",
+                "CREATE INDEX user_name_idx IF NOT EXISTS "
+                "FOR (u:User) ON (u.name)",
 
-                # Category
-                "CREATE CONSTRAINT FOR (c:Category) REQUIRE c.name IS UNIQUE"
+                # --- Review ---
+                "CREATE CONSTRAINT review_id_unique IF NOT EXISTS "
+                "FOR (r:Review) REQUIRE r.review_id IS UNIQUE",
+
+                "CREATE INDEX review_date_idx IF NOT EXISTS "
+                "FOR (r:Review) ON (r.date)",
+
+                # --- State ---
+                "CREATE CONSTRAINT state_code_unique IF NOT EXISTS "
+                "FOR (s:State) REQUIRE s.code IS UNIQUE",
+
+                # --- City ---
+                "CREATE CONSTRAINT city_name_state_unique IF NOT EXISTS "
+                "FOR (c:City) REQUIRE (c.name, c.state_code) IS UNIQUE",
+
+                # --- Postal Code ---
+                "CREATE CONSTRAINT postal_code_unique IF NOT EXISTS "
+                "FOR (p:PostalCode) REQUIRE p.code IS UNIQUE",
+
+                # --- Category ---
+                "CREATE CONSTRAINT category_name_unique IF NOT EXISTS "
+                "FOR (c:Category) REQUIRE c.name IS UNIQUE"
             ]
 
             for query in constraints_and_indexes:

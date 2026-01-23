@@ -94,7 +94,9 @@ class Neo4jLoader:
         MERGE (:PostalCode {code: pc.code})
         """
 
-        data = [p.model_dump() for p in postal_codes]
+        # Ensure code is string
+        data = [{"code": str(pc.code)} for pc in postal_codes]
+
         return self._execute_query_batch(query, data, "PostalCode")
 
     def load_businesses(self, businesses: List[Dict[str, Any]]) -> int:

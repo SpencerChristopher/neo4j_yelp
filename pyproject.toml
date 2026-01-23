@@ -37,4 +37,4 @@ pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "--strict-markers --strict-config" # Recommended best practices
 
-pytest = "^9.0.2"
+

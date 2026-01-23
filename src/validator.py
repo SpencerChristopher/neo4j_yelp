@@ -2,7 +2,7 @@ from typing import List, Dict, Any, Tuple
 from pydantic import ValidationError
 from src.models.business import Business
 from src.models.user import User
-from src.models.canonical import CanonicalCityState
+from src.models.canonical_city_state import CanonicalCityState
 import logging
 
 logger = logging.getLogger(__name__)
