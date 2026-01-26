@@ -9,15 +9,16 @@ load_dotenv()
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
-NEO4J_ELT_USER = os.getenv("NEO4J_ELT_USER", "elt_user")
-NEO4J_ELT_PASSWORD = os.getenv("NEO4J_ELT_PASSWORD")
+
 
 # Data File Paths
 DATA_DIR = "Data"
-BUSINESS_CSV = os.path.join(DATA_DIR, 'business_small.csv')
-BUSINESS_CITY_CSV = os.path.join(DATA_DIR, 'business_city.csv')
-REVIEW_CSV = os.path.join(DATA_DIR, 'review_small.csv')
-USER_CSV = os.path.join(DATA_DIR, 'user_small.csv')
+BUSINESS_CSV = 'business_small.csv'
+BUSINESS_CITY_CSV = 'business_city.csv' # Consider if this is the category source
+REVIEW_CSV = 'review_small.csv'
+USER_CSV = 'user_small.csv'
+CATEGORY_CSV = 'business_categories_small.csv' # Corrected from EDA log
+FRIEND_CSV = 'user_friendship.csv' # Corrected from EDA log
 
 # ETL Configuration
 BATCH_SIZE = 1000

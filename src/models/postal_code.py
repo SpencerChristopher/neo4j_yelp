@@ -6,71 +6,102 @@ logger = logging.getLogger(__name__)
 
 
 class PostalCode(BaseModel):
-    # Postal code as string (supports US, Canada, and other formats)
-    code: str = Field(..., description="Postal/ZIP code")
+    """Canonical postal code node - unique by normalized code."""
+
+    code: str = Field(
+        ...,
+        description="Normalized postal/ZIP code (no spaces, uppercase)"
+    )
+
+    # --- VALIDATORS ---
 
     @field_validator("code", mode="before")
     @classmethod
     def normalize_postal_code(cls, v):
-        """Normalize postal code to clean string format."""
+        """Normalize postal code - raise error for invalid input."""
         if v is None:
-            return None
+            raise ValueError("Postal code cannot be None")
 
         # Convert to string
         if isinstance(v, (int, float)):
-            v_str = str(int(v))  # Handle integers
+            v_str = str(int(v))
         else:
             v_str = str(v).strip()
 
         # Handle empty strings
         if v_str == "":
-            return None
+            raise ValueError("Postal code cannot be empty")
 
-        # Remove all spaces, hyphens, and other separators
-        v_str = re.sub(r'[\s\-]+', '', v_str)
+        # Remove all spaces, hyphens, and separators
+        v_str = re.sub(r'[\s\-\.]+', '', v_str)
 
         # Convert to uppercase
         v_str = v_str.upper()
 
         return v_str
 
-    @property
-    def display_format(self):
-        """Return postal code in a standard display format."""
-        if not self.code:
-            return None
+    @field_validator("code", mode="after")
+    @classmethod
+    def validate_postal_code_format(cls, v):
+        """Validate format and log warnings for non-standard codes."""
+        if len(v) < 3:
+            raise ValueError(f"Postal code too short: '{v}'")
+        if len(v) > 12:
+            raise ValueError(f"Postal code too long: '{v}'")
 
-        # Canadian postal code: A1A 1A1 format
+        # US ZIP code patterns
+        us_zip_pattern = r'^\d{5}$'  # 5 digits
+        us_zip4_pattern = r'^\d{9}$'  # 9 digits (ZIP+4 without separator)
+
+        # Canadian postal code pattern (A1A1A1 format after cleaning)
         canada_pattern = r'^[A-Z]\d[A-Z]\d[A-Z]\d$'
-        # US ZIP code: 5 digits or 9 digits (ZIP+4)
-        us_zip_pattern = r'^\d{5}$'
-        us_zip4_pattern = r'^\d{9}$'
 
-        if re.match(canada_pattern, self.code) and len(self.code) == 6:
+        if not (re.match(us_zip_pattern, v) or
+                re.match(us_zip4_pattern, v) or
+                re.match(canada_pattern, v)):
+            # If it's numeric but not standard US format, or alphanumeric not Canada, raise error.
+            # This makes the validator stricter than the one in business.py
+            raise ValueError(f"Postal code '{v}' does not match standard US (5 or 9 digit) or Canadian (A1A1A1) formats.")
+
+        # Log warnings for non-standard but accepted numeric/alphanumeric codes if desired,
+        # but for this model, we are enforcing strict conformity to known patterns.
+
+        return v
+
+    # --- PROPERTIES ---
+
+    @property
+    def display_format(self) -> str:
+        """Return in standard display format."""
+        fmt = self.country_format
+        if fmt == "CA":
             return f"{self.code[:3]} {self.code[3:]}"
-        elif re.match(us_zip4_pattern, self.code) and len(self.code) == 9:
+        elif fmt == "US_ZIP+4":
             return f"{self.code[:5]}-{self.code[5:]}"
         else:
             return self.code
 
     @property
-    def country_format(self):
-        """Detect the country format of the postal code."""
-        if not self.code:
-            return None
-
+    def country_format(self) -> str:
+        """Detect country/format type."""
         canada_pattern = r'^[A-Z]\d[A-Z]\d[A-Z]\d$'
         us_zip_pattern = r'^\d{5}$'
         us_zip4_pattern = r'^\d{9}$'
 
         if re.match(canada_pattern, self.code):
             return "CA"
-        elif re.match(us_zip_pattern, self.code) or re.match(us_zip4_pattern, self.code):
-            return "US"
+        elif re.match(us_zip_pattern, self.code):
+            return "US_ZIP"
+        elif re.match(us_zip4_pattern, self.code):
+            return "US_ZIP+4"
         elif self.code.isdigit():
-            return "US_NUMERIC"
+            return "NUMERIC"
+        elif re.match(r'^[A-Z0-9]+$', self.code):
+            return "ALPHANUMERIC"
         else:
             return "UNKNOWN"
+
+    # --- HASH/EQ FOR DEDUPLICATION ---
 
     def __hash__(self):
         return hash(self.code)
@@ -79,3 +110,6 @@ class PostalCode(BaseModel):
         if isinstance(other, PostalCode):
             return self.code == other.code
         return False
+
+    def __str__(self):
+        return f"PostalCode(code={self.code}, format={self.display_format})"

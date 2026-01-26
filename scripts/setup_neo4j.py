@@ -5,36 +5,29 @@ from neo4j.exceptions import AuthError, ClientError, ServiceUnavailable
 
 def setup_neo4j_database():
     """
-    Sets up the Neo4j database with schema constraints/indexes using admin credentials.
-    NOTE: User/role creation and granular privilege granting is not supported in
-    Neo4j Community Edition via remote Cypher scripts. If a dedicated 'elt_user'
-    is desired, it must be created and granted privileges manually (e.g., in Neo4j Browser).
+    Sets up the Neo4j database with schema constraints/indexes using a single user (for Community Edition).
     """
     load_dotenv()
 
-    # Admin Credentials for Setup
-    admin_uri = os.getenv("NEO4J_URI")
-    admin_user = os.getenv("NEO4J_USER")
-    admin_password = os.getenv("NEO4J_PASSWORD")
+    # Neo4j Credentials for Setup
+    neo4j_uri = os.getenv("NEO4J_URI")
+    neo4j_user = os.getenv("NEO4J_USER")
+    neo4j_password = os.getenv("NEO4J_PASSWORD")
 
-    # ETL User Credentials (for verification - will fail if user not manually created)
-    elt_user = os.getenv("NEO4J_ELT_USER")
-    elt_password = os.getenv("NEO4J_ELT_PASSWORD")
-
-    if not all([admin_uri, admin_user, admin_password]):
-        print("Error: All Neo4j Admin environment variables (URI, USER, PASSWORD) must be set in the .env file.")
+    if not all([neo4j_uri, neo4j_user, neo4j_password]):
+        print("Error: All Neo4j environment variables (URI, USER, PASSWORD) must be set in the .env file.")
         return
 
-    admin_driver = None
+    driver = None
     try:
-        # 1. Connect as Admin
-        admin_driver = GraphDatabase.driver(admin_uri, auth=(admin_user, admin_password))
-        admin_driver.verify_connectivity()
-        print("Admin: Successfully connected to Neo4j.")
+        # 1. Connect to Neo4j
+        driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+        driver.verify_connectivity()
+        print("Successfully connected to Neo4j.")
 
-        with admin_driver.session() as session:
+        with driver.session() as session:
             # 2. Create Constraints and Indexes
-            print("Admin: Creating unique constraints and indexes...")
+            print("Creating unique constraints and indexes...")
             constraints_and_indexes = [
 
                 # --- Business ---
@@ -78,53 +71,27 @@ def setup_neo4j_database():
             for query in constraints_and_indexes:
                 try:
                     session.run(query)
-                    print(f"Admin: Executed: {query}")
+                    print(f"Executed: {query}")
                 except ClientError as e:
                     if "already exists" in str(e):
-                        print(f"Admin: Constraint/Index already exists: {query}")
+                        print(f"Constraint/Index already exists: {query}")
                     else:
-                        print(f"Admin: Error executing '{query}': {e}")
+                        print(f"Error executing '{query}': {e}")
                         raise e
-            print("Admin: All constraints and indexes processed.")
+            print("All constraints and indexes processed.")
 
     except AuthError:
-        print(f"Error: Admin authentication failed for user '{admin_user}'. Check credentials.")
+        print(f"Error: Authentication failed for user '{neo4j_user}'. Check credentials.")
         return
     except ServiceUnavailable:
-        print(f"Error: Could not connect to Neo4j at {admin_uri}. Please ensure the database is running.")
+        print(f"Error: Could not connect to Neo4j at {neo4j_uri}. Please ensure the database is running.")
         return
     except Exception as e:
         print(f"Error during setup: {e}")
         return
     finally:
-        if admin_driver:
-            admin_driver.close()
-
-    # 3. Verify ETL User Connectivity (requires manual setup of elt_user and privileges if desired)
-    print(f"\nAttempting to verify ETL user '{elt_user}' connectivity (requires manual setup of user/privileges)...")
-    if not all([elt_user, elt_password]):
-        print("Warning: NEO4J_ELT_USER and NEO4J_ELT_PASSWORD are not fully set in .env. Skipping ETL user verification.")
-        return
-        
-    elt_driver = None
-    try:
-        elt_driver = GraphDatabase.driver(admin_uri, auth=(elt_user, elt_password))
-        elt_driver.verify_connectivity()
-        print(f"ETL User: Successfully connected to Neo4j as '{elt_user}'.")
-        # Optional: Run a simple query to ensure basic read access
-        with elt_driver.session() as session:
-            session.run("MATCH (n) RETURN n LIMIT 1")
-            print(f"ETL User: Basic read access verified.")
-
-    except AuthError:
-        print(f"Error: ETL user '{elt_user}' authentication failed. This user or its privileges might need manual setup.")
-    except ServiceUnavailable:
-        print(f"Error: Could not connect to Neo4j with ETL user at {admin_uri}.")
-    except Exception as e:
-        print(f"Error during ETL user verification: {e}")
-    finally:
-        if elt_driver:
-            elt_driver.close()
+        if driver:
+            driver.close()
 
 if __name__ == "__main__":
     setup_neo4j_database()

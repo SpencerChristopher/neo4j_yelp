@@ -15,13 +15,18 @@ class Location(BaseModel):
 
 
 class Business(BaseModel):
+    # Pydantic model configuration
+    model_config = {
+        "extra": "ignore"  # Ignore extra fields not defined in the model
+    }
+
     # Identity
     business_id: str
     name: str
 
     # Address (minimum viable location)
-    city: Optional[str] = None  # node should have state + (city or post_code)
-    state: str
+    city: Optional[str] = None
+    state: str = Field(..., min_length=2, max_length=2, pattern=r"^[A-Z]{2}$")
 
     # CHANGED: Postal code is now a string to handle both US and Canadian formats
     postal_code: Optional[str] = None
@@ -70,11 +75,15 @@ class Business(BaseModel):
         """
         Enforces that a business has a valid minimum location, which consists of:
         - A mandatory 'state'.
-        - At least one of 'city' or 'postal_code'.
+        - At least one of 'city' or 'postal_code' that is not just whitespace.
         """
-        if not (self.city or self.postal_code):
+        has_city = self.city is not None and len(self.city.strip()) > 0
+        has_postal = (
+                self.postal_code is not None and len(self.postal_code.strip()) > 0
+        )
+        if not (has_city or has_postal):
             raise ValueError(
-                "A Business must have a 'state' and at least one of 'city' or 'postal_code'."
+                "A Business must have a 'state' and at least one of 'city' or 'postal_code' with a non-empty value."
             )
         return self
 
@@ -153,19 +162,14 @@ class Business(BaseModel):
         elif re.match(canada_pattern, v):
             is_valid = True
             format_type = "CANADA_POSTAL"
-        elif v.isdigit():
-            # Numeric but not 5 or 9 digits - log warning but accept
-            logger.warning(f"Postal code '{v}' is numeric but not standard US format")
-            is_valid = True
-            format_type = "NUMERIC_NONSTANDARD"
         else:
-            # Not a standard format - log warning but accept
-            logger.warning(f"Postal code '{v}' does not match standard US/Canada formats")
-            is_valid = True
-            format_type = "NONSTANDARD"
+            format_type = "NONSTANDARD_INVALID" # Explicitly mark as invalid
 
         # Log the format detection (optional)
-        logger.debug(f"Postal code '{v}' detected as {format_type}")
+
+
+        if not is_valid:
+            raise ValueError(f"Postal code '{v}' does not match standard US (5 or 9 digit) or Canadian (A1A1A1) formats.")
 
         return v
 

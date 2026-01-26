@@ -1,0 +1,321 @@
+{
+  "style": {
+    "font-family": "sans-serif",
+    "background-color": "#ffffff",
+    "background-image": "",
+    "background-size": "100%",
+    "node-color": "#ffffff",
+    "border-width": 4,
+    "border-color": "#000000",
+    "radius": 50,
+    "node-padding": 5,
+    "node-margin": 2,
+    "outside-position": "auto",
+    "node-icon-image": "",
+    "node-background-image": "",
+    "icon-position": "inside",
+    "icon-size": 64,
+    "caption-position": "inside",
+    "caption-max-width": 200,
+    "caption-color": "#000000",
+    "caption-font-size": 50,
+    "caption-font-weight": "normal",
+    "label-position": "inside",
+    "label-display": "pill",
+    "label-color": "#000000",
+    "label-background-color": "#ffffff",
+    "label-border-color": "#000000",
+    "label-border-width": 4,
+    "label-font-size": 40,
+    "label-padding": 5,
+    "label-margin": 4,
+    "directionality": "directed",
+    "detail-position": "inline",
+    "detail-orientation": "parallel",
+    "arrow-width": 5,
+    "arrow-color": "#000000",
+    "margin-start": 5,
+    "margin-end": 5,
+    "margin-peer": 20,
+    "attachment-start": "normal",
+    "attachment-end": "normal",
+    "relationship-icon-image": "",
+    "type-color": "#000000",
+    "type-background-color": "#ffffff",
+    "type-border-color": "#000000",
+    "type-border-width": 0,
+    "type-font-size": 16,
+    "type-padding": 5,
+    "property-position": "outside",
+    "property-alignment": "colon",
+    "property-color": "#000000",
+    "property-font-size": 16,
+    "property-font-weight": "normal"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "position": {
+        "x": -54.67589635431115,
+        "y": 219.95314596668416
+      },
+      "caption": "User",
+      "labels": [
+        "User"
+      ],
+      "properties": {
+        "user_id": "STRING",
+        "name": "STRING",
+        "review_count": "INTEGER",
+        "yelping_since": "DATE",
+        "average_stars": "FLOAT",
+        "useful": "INTEGER",
+        "funny": "INTEGER",
+        "cool": "INTEGER",
+        "fans": "INTEGER",
+        "compliment_hot": "INTEGER",
+        "compliment_more": "INTEGER",
+        "compliment_profile": "INTEGER",
+        "compliment_cute": "INTEGER",
+        "compliment_list": "INTEGER",
+        "compliment_note": "INTEGER",
+        "compliment_plain": "INTEGER",
+        "compliment_cool": "INTEGER",
+        "compliment_funny": "INTEGER",
+        "compliment_writer": "INTEGER",
+        "compliment_photos": "INTEGER"
+      },
+      "style": {
+        "node-color": "#54A0FF",
+        "label-border-width": 4,
+        "border-color": "#4d4d4d",
+        "border-width": 3,
+        "label-border-color": "#000000"
+      }
+    },
+    {
+      "id": "n1",
+      "position": {
+        "x": 245.32410364568906,
+        "y": 219.95314596668416
+      },
+      "caption": "Review",
+      "labels": [
+        "Review"
+      ],
+      "properties": {
+        "review_id": "STRING",
+        "date": "DATE",
+        "stars": "INTEGER",
+        "useful": "INTEGER",
+        "funny": "INTEGER",
+        "cool": "INTEGER",
+        "sentiment_score": "FLOAT",
+        "confidence": "FLOAT"
+      },
+      "style": {
+        "node-color": "#FF9F43"
+      }
+    },
+    {
+      "id": "n2",
+      "position": {
+        "x": 545.3241036456878,
+        "y": 219.95314596668416
+      },
+      "caption": "Business",
+      "labels": [
+        "Business"
+      ],
+      "properties": {
+        "business_id": "STRING",
+        "name": "STRING",
+        "stars": "FLOAT",
+        "review_count": "INTEGER",
+        "is_open": "BOOLEAN",
+        "city": "STRING",
+        "state": "STRING",
+        "postal_code": "STRING",
+        "latitude": "FLOAT",
+        "longitude": "FLOAT"
+      },
+      "style": {
+        "node-color": "#10AC84"
+      }
+    },
+    {
+      "id": "n3",
+      "position": {
+        "x": 177.54454297792356,
+        "y": 587.7327066344485
+      },
+      "caption": "Category",
+      "labels": [
+        "Category"
+      ],
+      "properties": {
+        "name": "STRING"
+      },
+      "style": {
+        "node-color": "#576574"
+      }
+    },
+    {
+      "id": "n4",
+      "position": {
+        "x": 913.1036643134521,
+        "y": 219.95315531074598
+      },
+      "caption": "PostalCode",
+      "labels": [
+        "PostalCode"
+      ],
+      "properties": {
+        "code": "STRING"
+      },
+      "style": {
+        "node-color": "#EE5253"
+      }
+    },
+    {
+      "id": "n5",
+      "position": {
+        "x": 545.3241036456878,
+        "y": 587.7327066344485
+      },
+      "caption": "City",
+      "labels": [
+        "City"
+      ],
+      "properties": {
+        "name": "STRING",
+        "state_code": "STRING"
+      },
+      "style": {
+        "node-color": "#FF6B6B"
+      }
+    },
+    {
+      "id": "n6",
+      "position": {
+        "x": 913.1036643134521,
+        "y": 587.7327066344486
+      },
+      "caption": "State",
+      "labels": [
+        "State"
+      ],
+      "properties": {
+        "code": "STRING"
+      },
+      "style": {
+        "node-color": "#8395A7"
+      }
+    },
+    {
+      "id": "n7",
+      "position": {
+        "x": -502.52341684556563,
+        "y": 219.95314596668416
+      },
+      "caption": "User",
+      "labels": [
+        "User"
+      ],
+      "properties": {
+        "user_id": "STRING",
+        "name": "STRING",
+        "compliment_hot": "INTEGER",
+        "compliment_more": "INTEGER",
+        "compliment_profile": "INTEGER",
+        "compliment_cute": "INTEGER",
+        "compliment_list": "INTEGER",
+        "compliment_note": "INTEGER",
+        "compliment_plain": "INTEGER",
+        "compliment_cool": "INTEGER",
+        "compliment_funny": "INTEGER",
+        "compliment_writer": "INTEGER",
+        "compliment_photos": "INTEGER"
+      },
+      "style": {
+        "border-color": "#4d4d4d",
+        "node-color": "#fda1ff"
+      }
+    }
+  ],
+  "relationships": [
+    {
+      "id": "n0",
+      "fromId": "n0",
+      "toId": "n1",
+      "type": "WROTE",
+      "properties": {},
+      "style": {}
+    },
+    {
+      "id": "n1",
+      "fromId": "n1",
+      "toId": "n2",
+      "type": "OF",
+      "properties": {},
+      "style": {}
+    },
+    {
+      "id": "n2",
+      "fromId": "n2",
+      "toId": "n3",
+      "type": "CLAIMS_CATEGORY",
+      "properties": {
+        "confidence": "FLOAT"
+      },
+      "style": {}
+    },
+    {
+      "id": "n3",
+      "fromId": "n2",
+      "toId": "n4",
+      "type": "CLAIMS_POSTAL_CODE",
+      "properties": {
+        "source": "STRING"
+      },
+      "style": {}
+    },
+    {
+      "id": "n4",
+      "fromId": "n2",
+      "toId": "n5",
+      "type": "LOCATED_NEAR",
+      "properties": {
+        "latitude": "FLOAT",
+        "longitude": "FLOAT"
+      },
+      "style": {}
+    },
+    {
+      "id": "n5",
+      "fromId": "n5",
+      "toId": "n6",
+      "type": "CLAIMS_STATE",
+      "properties": {},
+      "style": {}
+    },
+    {
+      "id": "n6",
+      "fromId": "n0",
+      "toId": "n7",
+      "type": "FRIENDS_WITH",
+      "properties": {
+        "since": "DATE"
+      },
+      "style": {}
+    },
+    {
+      "id": "n7",
+      "fromId": "n2",
+      "toId": "n6",
+      "type": "CLAIMS_STATE",
+      "properties": {},
+      "style": {}
+    }
+  ]
+}

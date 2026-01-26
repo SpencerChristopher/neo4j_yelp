@@ -1,54 +1,102 @@
-# Yelp Graph Analyzer
+# Yelp Graph Analyzer ETL Pipeline
 
-This project aims to build a Yelp-style recommendation engine using Python and Neo4j. It processes Yelp dataset information to create a graph database for efficient querying and analysis.
+This project implements an Extract, Transform, Load (ETL) pipeline to process Yelp-like dataset information and ingest it into a Neo4j graph database. The goal is to build a foundation for a Yelp-style recommendation engine by structuring data for efficient graph querying and analysis.
 
 ## Key Features:
-- **Comprehensive ETL Strategy:** Detailed plan for data extraction, transformation, and loading into Neo4j, documented in `ELT_Plan.md`.
-- **Data Validation with Pydantic:** Utilizes Pydantic models for robust schema validation and data transformation during the ETL process, ensuring data quality.
-- **Efficient Data Ingestion:** Implements chunking and batch processing for optimal memory management and performance during Neo4j data loading.
-- **Graph Data Model:** Utilizes a detailed graph data model for users, businesses, reviews, categories, and locations.
-- **Neo4j Integration:** Integrates with Neo4j using the official Python driver, leveraging Community Edition compatible APOC plugins for advanced functionalities.
-- **Docker-based Environment:** A `docker-compose.yml` setup provides a consistent Neo4j environment, pre-configured for ETL optimizations.
+
+-   **Robust Data Models:** Utilizes Pydantic V2 for strict data validation, cleaning, and normalization, ensuring high data quality before ingestion.
+-   **Structured ETL Pipeline:** `src/pipeline.py` orchestrates the entire ETL process (reading CSVs, validating, normalizing, loading) in distinct, manageable phases.
+-   **Resilient Neo4j Loader:** The `Neo4jLoader` (in `src/loader.py`) handles efficient and fault-tolerant data ingestion into Neo4j using adaptive batching, retries (via `tenacity`), and a dead-letter queuing mechanism.
+-   **Defined Graph Data Model:** The target graph structure, including nodes and relationships, is clearly defined, with `Base_Graph_Loaded.json` serving as the blueprint.
+-   **Docker-based Environment:** A `docker-compose.yml` setup provides a consistent and pre-configured Neo4j environment, including necessary APOC and GDS plugins.
+-   **Comprehensive Test Suite:** Includes unit tests for data models, and integration tests for the `Neo4jLoader` and the end-to-end pipeline, ensuring correctness and reliability.
+-   **Schema Enforcement:** Unique constraints and indexes are established in Neo4j using `scripts/setup_neo4j.py` for data integrity and query performance.
 
 ## Getting Started
 
-### 1. Clone the Repository & Initialize Git LFS
+### 1. Prerequisites
 
-This repository uses Git Large File Storage (LFS) for handling large CSV data files within the `Data/` directory. Ensure you have Git LFS installed before cloning.
+Before you begin, ensure you have the following installed:
+
+-   **Git LFS:** For handling large CSV data files.
+-   **Python 3.10+**
+-   **Poetry:** For dependency management.
+-   **Docker & Docker Compose:** For running the Neo4j database.
+
+### 2. Clone the Repository & Install Dependencies
+
+Clone the project repository and install Python dependencies using Poetry:
 
 ```bash
 git lfs install
 git clone <repository-url>
 cd neo4j_yelp # Or your project root directory
+poetry install
 ```
 
-### 2. Prepare the Data
+### 3. Prepare the Data
 
-The raw CSV data is **not** included directly in the repository due to its large size. You can download the `YelpSmall.zip` file from the [original data source](LINK_TO_DATA_SOURCE_HERE) and extract its contents into the `Data/` directory.
+The ETL pipeline expects specific CSV files to be present in the `Data/` directory. These files include:
+-   `business_small.csv`
+-   `user_small.csv`
+-   `review_small.csv`
+-   `business_categories_small.csv`
+-   `user_friendship.csv`
 
-```bash
-unzip YelpSmall.zip -d Data/
-```
-**Note:** The `Data/` directory itself is not tracked by Git (it's in `.gitignore`).
+**Note:** The `Data/` directory itself is not tracked by Git (it's in `.gitignore`). You will need to obtain these CSV files and place them inside the `Data/` directory.
 
-### 3. Set up the Neo4j Environment
+### 4. Set up the Neo4j Environment
 
 The project uses Docker Compose to manage the Neo4j database.
-*   Review and configure `docker-compose.yml` as per the `ELT_Plan.md` for optimal ETL performance (e.g., memory settings, volume mounts).
-*   Ensure a dedicated ELT user is configured in Neo4j with appropriate permissions for the ETL script.
+
+1.  **Configure Environment Variables:** Create a `.env` file in the project root based on `.env.template`. At minimum, set:
+    ```
+    NEO4J_URI=bolt://localhost:7687
+    NEO4J_USER=neo4j
+    NEO4J_PASSWORD=your_neo4j_password
+    NEO4J_ELT_USER=elt_user
+    NEO4J_ELT_PASSWORD=your_elt_user_password
+    ```
+    (Ensure `elt_user` is created in Neo4j with appropriate permissions if you use it).
+
+2.  **Start Neo4j Container:**
+    ```bash
+    docker-compose up -d neo4j
+    ```
+
+3.  **Create Constraints and Indexes:** Run the setup script to establish unique constraints and indexes in the Neo4j database. This is crucial for data integrity and performance.
+    ```bash
+    poetry run python scripts/setup_neo4j.py
+    ```
+
+### 5. Run the ETL Process
+
+Execute the main pipeline script to load data from the CSVs into Neo4j:
 
 ```bash
-docker-compose up -d neo4j
+poetry run python src/pipeline.py
 ```
 
-### 4. Run the ETL Process
+### 6. Testing
 
-Refer to `ELT_Plan.md` for the detailed strategy. The `populate_db.py` script (to be created) will execute the ETL.
+The project includes a comprehensive test suite covering unit and integration tests.
 
-### 5. Further Exploration
+1.  **Run All Tests (Unit & Integration):**
+    ```bash
+    poetry run pytest
+    ```
+2.  **Run Unit Tests Only:**
+    ```bash
+    poetry run pytest -m "unit"
+    ```
+3.  **Run Integration Tests Only (Requires Neo4j Container):**
+    ```bash
+    poetry run pytest -m "integration and neo4j"
+    ```
+    *(Ensure the Neo4j container is running using `docker-compose up -d neo4j` before running integration tests.)*
 
-The `2v_exploratory_data_analysis.py` script was used for initial data profiling and can be run to regenerate data insights.
+### 7. Graph Data Model & Analytical Queries
 
-```bash
-python 2v_exploratory_data_analysis.py
-```
+The structure of the graph database (nodes, relationships, and properties) is visualized in `Base_Graph_Loaded.json`.
+
+After the ETL process, you can explore the loaded data and run analytical queries. `neo4j/queries.cypher` contains example Cypher queries for analysis.

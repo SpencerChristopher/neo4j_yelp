@@ -1,9 +1,9 @@
 [project]
 name = "yelp-graph-analyzer"
-version = "0.1.0"
+version = "0.2.0"
 description = "Yelp recommendation engine using Neo4j"
 authors = [
-    {name = "Christopher Spencer ",email = "121028147+SpencerChristopher@users.noreply.github.com"}
+    {name = "Christopher Spencer ", email = "121028147+SpencerChristopher@users.noreply.github.com"}
 ]
 license = {text = "MIT"}
 readme = "README.md"
@@ -18,8 +18,8 @@ dependencies = [
     "matplotlib (>=3.8.2,<4.0.0)",
     "seaborn (>=0.13.0,<1.0.0)",
     "python-dotenv (>=1.0.0,<2.0.0)",
+    "tenacity (>=9.1.2,<10.0.0)",
 ]
-
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
@@ -30,11 +30,43 @@ package-mode = false
 
 [tool.poetry.group.dev.dependencies]
 notebook = "^7.5.2"
-pytest = "^9.0.2" # Added for testing
+pytest = "^9.0.2"
+pytest-mock = "^3.15.1"
+pytest-cov = "^6.0.0"
+pytest-xdist = "^3.6.1"
+factory-boy = "^3.3.0"
+faker = "^25.8.0"
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+# Changed from "src" to "." so that 'from src.pipeline' and 'from loader' both work
+pythonpath = ["."]
 testpaths = ["tests"]
-addopts = "--strict-markers --strict-config" # Recommended best practices
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--verbose",
+    "--tb=short",
+    "--cov=src",
+    "--cov-report=term-missing",
+    "--cov-report=html:coverage_html",
+]
+markers = [
+    "unit: Unit tests (fast, no external dependencies)",
+    "integration: Integration tests (requires external services)",
+    "slow: Slow running tests",
+    "database: Tests that require database access",
+    "neo4j: Tests that require Neo4j connection",
+]
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning",
+]
 
-
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/migrations/*",
+    "*/alembic/*",
+]

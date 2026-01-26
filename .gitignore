@@ -18,14 +18,27 @@ __pycache__/
 project_outline.md
 *.zip
 
-# Data files (if they are large and shouldn't be in git)
-Data/
+# Data files (now tracked)
+tests/data/
 
-# Other
-.DS_Store
-*.ipynb_checkpoints
+# My temporary script
+get_test_counts.py
+
+# Other generated or temporary files
+# Base_Graph_Loaded.json # Removed from .gitignore, as it is graph documentation
+coverage_html/
+logs/
+*.log # Already present, but explicit logs/ covers more
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints/
+
+# Build artifacts
 build/
 dist/
 *.egg-info/
-*.log
-logs/*.jsonl
+.coverage # Python coverage file
+.coverage
+eda_log.log
+# macOS specific
+.DS_Store

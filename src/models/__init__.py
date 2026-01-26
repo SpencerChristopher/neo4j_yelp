@@ -8,11 +8,24 @@ from models.business import Business
 You can do:
 from models import Business
 """
+# src/models/__init__.py
 from .business import Business, Location
+from .user import User
+from .review import Review
 from .city import City
 from .state import State
 from .postal_code import PostalCode
-from .canonical_city_state import CanonicalCityState
-# When User and Review models are created, they will be imported here as well.
-# from .user import User
-# from .review import Review
+from .category import Category
+from .friend import Friend
+
+__all__ = [
+    "Business",
+    "Location",
+    "User",
+    "Review",
+    "City",
+    "State",
+    "PostalCode",
+    "Category",
+    "Friend",
+]
