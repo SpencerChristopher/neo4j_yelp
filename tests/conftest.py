@@ -1,9 +1,5 @@
-"""
-Pytest configuration file for shared fixtures and plugins.
-"""
 import os
 import pytest
-from dotenv import load_dotenv
 from unittest.mock import Mock, MagicMock
 
 # New imports for Neo4j fixtures
@@ -14,12 +10,11 @@ import logging
 from neo4j.exceptions import ServiceUnavailable
 
 from src.loader import Neo4jLoader
-from src.settings import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD # Use NEO4J_USER for admin
+from src.settings import settings
 
 from src.logging_config import setup_logging
 
-# Load environment variables for testing
-load_dotenv()
+# Setup logging first
 setup_logging()
 
 
@@ -59,9 +54,10 @@ def neo4j_container():
         max_retries = 30
         for i in range(max_retries):
             try:
-                driver = Neo4jLoader(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD).driver
-                driver.verify_connectivity()
-                driver.close()
+                # Neo4jLoader now gets credentials from settings
+                loader = Neo4jLoader()
+                loader.driver.verify_connectivity()
+                loader.close()
                 logger.info("Neo4j container is ready.")
                 break
             except ServiceUnavailable:
@@ -87,7 +83,7 @@ def neo4j_clear_db(neo4j_container):
     """
     loader = None
     try:
-        loader = Neo4jLoader(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
+        loader = Neo4jLoader()
         logger = logging.getLogger(__name__)
 
         # 1. Clear existing data

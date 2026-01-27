@@ -5,7 +5,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from src.loader import Neo4jLoader
-from src.settings import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
+from src.settings import settings
 from src.models import Business, Review, User
 from src.normalizer import normalize_business_data, normalize_review_data, normalize_user_data
 
@@ -139,7 +139,7 @@ class TestNeo4jQueryMismatch:
     def live_neo4j_loader(self):
         """Provides a Neo4jLoader instance for integration tests."""
         # Ensure Neo4j is running for this fixture to work
-        loader = Neo4jLoader(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
+        loader = Neo4jLoader()
         yield loader
         loader.close()
 

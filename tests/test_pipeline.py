@@ -1,21 +1,3 @@
-# test_pipeline.py - REAL TEST EXAMPLE
-from winreg import error
-
-import pytest
-from unittest.mock import Mock, patch
-
-try:
-    from src.pipeline import run_pipeline, _write_dead_letters
-    from src.loader import Neo4jLoader
-except ImportError as e:  # Removed the parentheses around 'e'
-    print(f"Import failed: {e}")
-    raise # Re-raise the exception to make the test fail explicitly
-
-import json
-import tempfile
-import os
-
-
 def test_write_dead_letters(monkeypatch):
     """Test dead letter queue functionality"""
     with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.jsonl') as f:
@@ -32,7 +14,7 @@ def test_write_dead_letters(monkeypatch):
         }]
 
         # Use monkeypatch fixture
-        monkeypatch.setattr('src.settings.DEAD_LETTER_FILE', temp_file)
+        monkeypatch.setattr('src.settings.settings.DEAD_LETTER_FILE', temp_file)
 
         _write_dead_letters(records)
 
@@ -126,12 +108,12 @@ def test_run_pipeline_small_batch(neo4j_loader, monkeypatch):
     """
     # Monkeypatch DATA_DIR to point to the test data
     test_data_path = os.path.join(os.path.dirname(__file__), 'data')
-    monkeypatch.setattr('src.settings.DATA_DIR', test_data_path)
-    monkeypatch.setattr('src.settings.BUSINESS_CSV', 'test.business_small.csv')
-    monkeypatch.setattr('src.settings.USER_CSV', 'test.user_small.csv')
-    monkeypatch.setattr('src.settings.CATEGORY_CSV', 'test.business_categories_small.csv')
-    monkeypatch.setattr('src.settings.REVIEW_CSV', 'test.review_small.csv')
-    monkeypatch.setattr('src.settings.FRIEND_CSV', 'test.user_friendship.csv')
+    monkeypatch.setattr('src.settings.settings.DATA_DIR', test_data_path)
+    monkeypatch.setattr('src.settings.settings.BUSINESS_CSV', 'test.business_small.csv')
+    monkeypatch.setattr('src.settings.settings.USER_CSV', 'test.user_small.csv')
+    monkeypatch.setattr('src.settings.settings.CATEGORY_CSV', 'test.business_categories_small.csv')
+    monkeypatch.setattr('src.settings.settings.REVIEW_CSV', 'test.review_small.csv')
+    monkeypatch.setattr('src.settings.settings.FRIEND_CSV', 'test.user_friendship.csv')
 
     # Ensure a clean database (neo4j_loader fixture does this automatically)
     # The fixture also yields a connected Neo4jLoader instance.
@@ -169,9 +151,10 @@ def test_neo4j_loader_import_failure_handling(monkeypatch):
     monkeypatch.setattr('src.loader.Neo4jLoader.__init__',
                         Mock(side_effect=ImportError("Mocked Neo4jLoader init failure")))
     # Also mock the settings to prevent actual connection attempts by the Loader if __init__ is bypassed
-    monkeypatch.setattr('src.settings.NEO4J_URI', 'mock_uri')
-    monkeypatch.setattr('src.settings.NEO4J_USER', 'mock_user')
-    monkeypatch.setattr('src.settings.NEO4J_PASSWORD', 'mock_password')
+    # Remove the following three lines as Neo4jLoader no longer takes these args directly
+    # monkeypatch.setattr('src.settings.NEO4J_URI', 'mock_uri')
+    # monkeypatch.setattr('src.settings.NEO4J_USER', 'mock_user')
+    # monkeypatch.setattr('src.settings.NEO4J_PASSWORD', 'mock_password')
 
     with pytest.raises(ImportError, match="Mocked Neo4jLoader init failure"):
         from src.pipeline import run_pipeline # Re-import to ensure fresh module state if possible

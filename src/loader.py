@@ -7,23 +7,30 @@ import os
 import json
 from datetime import datetime
 import logging
+import gc
+
+from src.settings import settings
 
 logger = logging.getLogger(__name__)
 
 
 class Neo4jLoader:
-    def __init__(self, uri: str, username: str, password: str):
+    def __init__(self):
         try:
-            self.driver: Driver = GraphDatabase.driver(uri, auth=(username, password))
+            self.driver: Driver = GraphDatabase.driver(
+                settings.NEO4J_URI, auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+            )
             self._verify_connection()
             logger.info("Neo4j driver initialized and connected.")
 
-            # Adaptive batch sizing
-            self.current_batch_size = 1000
+            # Batch sizing from settings for consistency and configurability
+            self.current_batch_size = settings.BATCH_SIZE
             self.consecutive_failures = 0
-            self.max_batch_size = 5000
-            self.min_batch_size = 100
+            self.max_batch_size = settings.BATCH_SIZE * 5  # Allow for dynamic increase
+            self.min_batch_size = max(50, settings.BATCH_SIZE // 10)  # Ensure minimum is reasonable
             self.total_failed_records = 0
+            self.last_memory_check = time.time()
+            self.memory_pressure = False
 
         except Exception as e:
             logger.error("Failed to connect to Neo4j after retries", exc_info=True)
@@ -56,51 +63,82 @@ class Neo4jLoader:
         self.driver.verify_connectivity()
         logger.info("Neo4j connectivity verified.")
 
+    def _check_memory_pressure(self):
+        """Check if we should back off due to memory pressure."""
+        current_time = time.time()
+        if current_time - self.last_memory_check < 5:  # Check every 5 seconds
+            return self.memory_pressure
+
+        self.last_memory_check = current_time
+        try:
+            # Simple memory check - reduce batch size if Python memory is high
+            import psutil
+            process = psutil.Process()
+            memory_percent = process.memory_percent()
+
+            if memory_percent > 70:  # 70% memory usage
+                logger.warning(f"Memory pressure detected: {memory_percent:.1f}%")
+                self.memory_pressure = True
+                return True
+            else:
+                self.memory_pressure = False
+                return False
+        except ImportError:
+            # psutil not available, skip memory check
+            return False
+
     def _adjust_batch_size(self, success: bool):
-        """Adaptively adjust batch size based on success/failure."""
+        """Adaptively adjust batch size based on success/failure and memory pressure."""
+        if self._check_memory_pressure():
+            # Aggressively reduce batch size on memory pressure
+            self.current_batch_size = max(self.min_batch_size, self.current_batch_size // 2)
+            logger.warning(f"Memory pressure - reduced batch size to {self.current_batch_size}")
+            self.consecutive_failures = 0
+            return
+
         if success:
             self.consecutive_failures = 0
-            # Gradually increase if we're doing well
+            # Very conservative increase
             if self.current_batch_size < self.max_batch_size:
                 self.current_batch_size = min(
-                    self.current_batch_size * 2,
+                    int(self.current_batch_size * 1.2),  # Gradual increase (20%)
                     self.max_batch_size
                 )
-                logger.info(f"Increased batch size to {self.current_batch_size}")
+                logger.debug(f"Gradually increased batch size to {self.current_batch_size}")
         else:
             self.consecutive_failures += 1
-            # Halve batch size on consecutive failures
+            # Aggressive reduction on failure
             new_size = max(
                 self.current_batch_size // 2,
                 self.min_batch_size
             )
             if new_size < self.current_batch_size:
                 self.current_batch_size = new_size
-                logger.warning(f"Decreased batch size to {self.current_batch_size} after {self.consecutive_failures} failures")
+                logger.warning(
+                    f"Decreased batch size to {self.current_batch_size} after {self.consecutive_failures} failures")
 
-            # If many failures, pause briefly
-            if self.consecutive_failures >= 3:
-                logger.warning(f"Multiple consecutive failures, pausing for 10 seconds")
-                time.sleep(10)
+            # If many failures, pause longer
+            if self.consecutive_failures >= 2:
+                logger.warning(f"Multiple consecutive failures, pausing for 5 seconds")
+                time.sleep(5)
 
     def _write_batch_dead_letters(self, failed_records: List[Dict[str, Any]]) -> None:
         """Write batch failures to dead letter queue with memory safety."""
         if not failed_records:
             return
 
-        batch_dead_letter_file = "logs/batch_dead_letters.jsonl"
-        os.makedirs(os.path.dirname(batch_dead_letter_file), exist_ok=True)
+        os.makedirs(os.path.dirname(settings.DEAD_LETTER_FILE), exist_ok=True)
 
         try:
-            with open(batch_dead_letter_file, "a", encoding="utf-8") as f:
-                # LIMIT to 100 records per batch to prevent memory issues
-                for record in failed_records[:100]:
+            with open(settings.DEAD_LETTER_FILE, "a", encoding="utf-8") as f:
+                # LIMIT to 50 records per batch to prevent memory issues
+                for record in failed_records[:50]:
                     safe_record = {
                         "timestamp": datetime.now().isoformat(),
                         "type": record.get("type", "unknown"),
                         "label": record.get("label", "unknown"),
-                        "error": str(record.get("error", ""))[:200],  # Truncate
-                        "record_sample": {k: str(v)[:100] for k, v in record.get("record", {}).items()}  # Truncate values
+                        "error": str(record.get("error", ""))[:200],
+                        "record_sample": {k: str(v)[:100] for k, v in record.get("record", {}).items()}
                     }
                     f.write(json.dumps(safe_record) + "\n")
         except Exception as e:
@@ -136,8 +174,8 @@ class Neo4jLoader:
 
                 counters = summary.counters
                 created = (
-                    counters.nodes_created
-                    + counters.relationships_created
+                        counters.nodes_created
+                        + counters.relationships_created
                 )
 
                 logger.debug(
@@ -160,7 +198,7 @@ class Neo4jLoader:
 
             # Return failed records for dead letter queue
             failed_records = []
-            for record in data[:10]:  # Only sample first 10 records to avoid memory issues
+            for record in data[:5]:  # Only sample first 5 records
                 failed_records.append({
                     "type": "batch_failure",
                     "label": label,
@@ -172,7 +210,7 @@ class Neo4jLoader:
             return 0, failed_records
 
     # ----------------------------
-    # Node loaders (updated to return failure info)
+    # Node loaders (updated for immediate relationship creation)
     # ----------------------------
 
     def load_states(self, states: List[Dict]) -> Tuple[int, List[Dict]]:
@@ -214,22 +252,70 @@ class Neo4jLoader:
             self._write_batch_dead_letters(failed)
         return created, failed
 
-    def load_businesses(self, businesses: List[Dict[str, Any]]) -> Tuple[int, List[Dict]]:
+    def load_businesses_complete(self, businesses: List[Dict[str, Any]]) -> Tuple[int, List[Dict]]:
+        """
+        Load businesses WITH their geographic relationships in a single operation.
+        This ensures atomic creation of business with all its connections.
+        """
         if not businesses:
             return 0, []
 
-        query = """
-        UNWIND $data AS b
-        MERGE (biz:Business {business_id: b.business_id})
-        SET biz.name = b.name,
-            biz.stars = b.stars,
-            biz.review_count = b.review_count,
-            biz.is_open = b.is_open
-        """
-        created, failed = self._execute_query_batch(query, businesses, "Business")
-        if failed:
-            self._write_batch_dead_letters(failed)
-        return created, failed
+        # Split into micro-batches for memory safety
+        micro_batch_size = max(50, min(100, self.current_batch_size // 2))
+        total_created = 0
+        total_failed = []
+
+        for i in range(0, len(businesses), micro_batch_size):
+            micro_batch = businesses[i:i + micro_batch_size]
+
+            # Check memory pressure before each micro-batch
+            if self._check_memory_pressure():
+                logger.warning("Memory pressure - pausing before next micro-batch")
+                time.sleep(2)
+                micro_batch_size = max(self.min_batch_size, micro_batch_size // 2)
+
+            query = """
+            UNWIND $data AS b
+            // Create or match Business
+            MERGE (biz:Business {business_id: b.business_id})
+            SET biz.name = b.name,
+                biz.stars = b.stars,
+                biz.review_count = b.review_count,
+                biz.is_open = b.is_open
+
+            // Create or match State (if exists)
+            WITH biz, b
+            WHERE b.state IS NOT NULL
+            MERGE (state:State {code: b.state})
+            MERGE (biz)-[:CLAIMS_STATE]->(state)
+
+            // Create or match City (if exists) - requires both city and state
+            WITH biz, b, state
+            WHERE b.city IS NOT NULL AND b.state IS NOT NULL
+            MERGE (city:City {name: b.city, state_code: b.state})
+            MERGE (biz)-[loc:LOCATED_NEAR]->(city)
+            SET loc.latitude = b.latitude,
+                loc.longitude = b.longitude
+            MERGE (city)-[:CLAIMS_STATE]->(state)  // City->State relationship
+
+            // Create or match PostalCode (if exists)
+            WITH biz, b
+            WHERE b.postal_code IS NOT NULL
+            MERGE (postal:PostalCode {code: b.postal_code})
+            MERGE (biz)-[:CLAIMS_POSTAL_CODE]->(postal)
+            """
+
+            created, failed = self._execute_query_batch(query, micro_batch, "BusinessComplete")
+            total_created += created
+            if failed:
+                total_failed.extend(failed)
+                self._write_batch_dead_letters(failed)
+
+            # Small pause between micro-batches to let Neo4j catch up
+            if i + micro_batch_size < len(businesses):
+                time.sleep(0.1)
+
+        return total_created, total_failed
 
     def load_categories(self, categories: List[Dict[str, Any]]) -> Tuple[int, List[Dict]]:
         if not categories:
@@ -248,21 +334,37 @@ class Neo4jLoader:
         if not reviews:
             return 0, []
 
-        query = """
-        UNWIND $data AS r
-        MERGE (rev:Review {review_id: r.review_id})
-        SET rev.user_id = r.user_id,
-            rev.business_id = r.business_id,
-            rev.stars = r.stars,
-            rev.date = r.date,
-            rev.useful = r.useful,
-            rev.funny = r.funny,
-            rev.cool = r.cool
-        """
-        created, failed = self._execute_query_batch(query, reviews, "Review")
-        if failed:
-            self._write_batch_dead_letters(failed)
-        return created, failed
+        # Split into smaller batches for reviews (they're text-heavy)
+        micro_batch_size = max(50, min(100, self.current_batch_size // 2))
+        total_created = 0
+        total_failed = []
+
+        for i in range(0, len(reviews), micro_batch_size):
+            micro_batch = reviews[i:i + micro_batch_size]
+
+            query = """
+            UNWIND $data AS r
+            MERGE (rev:Review {review_id: r.review_id})
+            SET rev.user_id = r.user_id,
+                rev.business_id = r.business_id,
+                rev.stars = r.stars,
+                rev.date = r.date,
+                rev.useful = r.useful,
+                rev.funny = r.funny,
+                rev.cool = r.cool
+            """
+            created, failed = self._execute_query_batch(query, micro_batch, "Review")
+            total_created += created
+            if failed:
+                total_failed.extend(failed)
+
+            # Small pause
+            if i + micro_batch_size < len(reviews):
+                time.sleep(0.05)
+
+        if total_failed:
+            self._write_batch_dead_letters(total_failed)
+        return total_created, total_failed
 
     def load_users(self, users: List[Dict]) -> Tuple[int, List[Dict]]:
         if not users:
@@ -297,7 +399,7 @@ class Neo4jLoader:
         return created, failed
 
     # ----------------------------
-    # Relationship loaders
+    # Relationship loaders (for non-business relationships)
     # ----------------------------
 
     def create_relationships(self, relationships: List[Dict[str, Any]]) -> Tuple[int, List[Dict]]:
@@ -312,111 +414,52 @@ class Neo4jLoader:
             grouped.setdefault(rel["relationship_type"], []).append(rel)
 
         for rel_type, rels in grouped.items():
-            if rel_type == "CLAIMS_STATE":
-                # Handle Business->State AND City->State
-                city_state_rels = [r for r in rels if r.get("from_node_type") == "City"]
-                business_state_rels = [r for r in rels if r.get("from_node_type") == "Business"]
+            # Process relationships in smaller chunks
+            chunk_size = max(100, min(200, self.current_batch_size // 3))
 
-                if city_state_rels:
+            for i in range(0, len(rels), chunk_size):
+                chunk = rels[i:i + chunk_size]
+
+                if rel_type == "WROTE":
                     query = """
                     UNWIND $data AS r
-                    MATCH (c:City {name: r.from_node_id_value, state_code: r.from_node_id_aux_value})
-                    MATCH (s:State {code: r.to_node_id_value})
-                    MERGE (c)-[:CLAIMS_STATE]->(s)
+                    MATCH (u:User {user_id: r.from_node_id_value})
+                    MATCH (rev:Review {review_id: r.to_node_id_value})
+                    MERGE (u)-[:WROTE]->(rev)
                     """
-                    created, failed = self._execute_query_batch(query, city_state_rels, "City->State")
-                    total_created += created
-                    if failed:
-                        total_failed.extend(failed)
-
-                if business_state_rels:
+                elif rel_type == "OF":
+                    query = """
+                    UNWIND $data AS r
+                    MATCH (rev:Review {review_id: r.from_node_id_value})
+                    MATCH (b:Business {business_id: r.to_node_id_value})
+                    MERGE (rev)-[:OF]->(b)
+                    """
+                elif rel_type == "CLAIMS_CATEGORY":
                     query = """
                     UNWIND $data AS r
                     MATCH (b:Business {business_id: r.from_node_id_value})
-                    MATCH (s:State {code: r.to_node_id_value})
-                    MERGE (b)-[:CLAIMS_STATE]->(s)
+                    MATCH (cat:Category {name: r.to_node_id_value})
+                    MERGE (b)-[:CLAIMS_CATEGORY]->(cat)
                     """
-                    created, failed = self._execute_query_batch(query, business_state_rels, "Business->State")
-                    total_created += created
-                    if failed:
-                        total_failed.extend(failed)
+                elif rel_type == "FRIENDS_WITH":
+                    query = """
+                    UNWIND $data AS r
+                    MATCH (u1:User {user_id: r.from_node_id_value})
+                    MATCH (u2:User {user_id: r.to_node_id_value})
+                    MERGE (u1)-[:FRIENDS_WITH]->(u2)
+                    """
+                else:
+                    logger.warning(f"Unknown relationship type: {rel_type}")
+                    continue
 
-            elif rel_type == "LOCATED_NEAR":
-                query = """
-                UNWIND $data AS r
-                MATCH (b:Business {business_id: r.from_node_id_value})
-                MATCH (c:City {name: r.to_node_id_value, state_code: r.to_node_id_aux_value})
-                MERGE (b)-[rel:LOCATED_NEAR]->(c)
-                SET rel.latitude = r.properties['latitude'],
-                    rel.longitude = r.properties['longitude']
-                """
-                created, failed = self._execute_query_batch(query, rels, rel_type)
+                created, failed = self._execute_query_batch(query, chunk, rel_type)
                 total_created += created
                 if failed:
                     total_failed.extend(failed)
 
-            elif rel_type == "CLAIMS_POSTAL_CODE":
-                query = """
-                UNWIND $data AS r
-                MATCH (b:Business {business_id: r.from_node_id_value})
-                MATCH (p:PostalCode {code: r.to_node_id_value})
-                MERGE (b)-[:CLAIMS_POSTAL_CODE]->(p)
-                """
-                created, failed = self._execute_query_batch(query, rels, rel_type)
-                total_created += created
-                if failed:
-                    total_failed.extend(failed)
-
-            elif rel_type == "WROTE":
-                query = """
-                UNWIND $data AS r
-                MATCH (u:User {user_id: r.from_node_id_value})
-                MATCH (rev:Review {review_id: r.to_node_id_value})
-                MERGE (u)-[:WROTE]->(rev)
-                """
-                created, failed = self._execute_query_batch(query, rels, rel_type)
-                total_created += created
-                if failed:
-                    total_failed.extend(failed)
-
-            elif rel_type == "OF":
-                query = """
-                UNWIND $data AS r
-                MATCH (rev:Review {review_id: r.from_node_id_value})
-                MATCH (b:Business {business_id: r.to_node_id_value})
-                MERGE (rev)-[:OF]->(b)
-                """
-                created, failed = self._execute_query_batch(query, rels, rel_type)
-                total_created += created
-                if failed:
-                    total_failed.extend(failed)
-
-            elif rel_type == "CLAIMS_CATEGORY":
-                query = """
-                UNWIND $data AS r
-                MATCH (b:Business {business_id: r.from_node_id_value})
-                MATCH (cat:Category {name: r.to_node_id_value})
-                MERGE (b)-[:CLAIMS_CATEGORY]->(cat)
-                """
-                created, failed = self._execute_query_batch(query, rels, rel_type)
-                total_created += created
-                if failed:
-                    total_failed.extend(failed)
-
-            elif rel_type == "FRIENDS_WITH":
-                query = """
-                UNWIND $data AS r
-                MATCH (u1:User {user_id: r.from_node_id_value})
-                MATCH (u2:User {user_id: r.to_node_id_value})
-                MERGE (u1)-[:FRIENDS_WITH]->(u2)
-                """
-                created, failed = self._execute_query_batch(query, rels, rel_type)
-                total_created += created
-                if failed:
-                    total_failed.extend(failed)
-
-            else:
-                logger.warning("Unknown relationship type: %s", rel_type)
+                # Small pause between relationship chunks
+                if i + chunk_size < len(rels):
+                    time.sleep(0.05)
 
         if total_failed:
             self._write_batch_dead_letters(total_failed)

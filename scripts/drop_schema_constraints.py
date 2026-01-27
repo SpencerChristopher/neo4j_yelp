@@ -1,7 +1,8 @@
 import os
-from dotenv import load_dotenv
 from neo4j import GraphDatabase
 from neo4j.exceptions import AuthError, ServiceUnavailable
+from src.settings import settings
+
 
 def reset_schema():
     """
@@ -9,11 +10,9 @@ def reset_schema():
     ADMIN ONLY — destructive operation.
     """
 
-    load_dotenv()
-
-    uri = os.getenv("NEO4J_URI")
-    user = os.getenv("NEO4J_USER")
-    password = os.getenv("NEO4J_PASSWORD")
+    uri = settings.NEO4J_URI
+    user = settings.NEO4J_USER
+    password = settings.NEO4J_PASSWORD
 
     if not all([uri, user, password]):
         raise RuntimeError("Missing Neo4j admin credentials in environment")

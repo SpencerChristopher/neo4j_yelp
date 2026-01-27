@@ -1,7 +1,8 @@
 import os
-from dotenv import load_dotenv
 from neo4j import GraphDatabase
 from neo4j.exceptions import AuthError, ServiceUnavailable
+from src.settings import settings
+
 
 def clear_database():
     """
@@ -9,18 +10,19 @@ def clear_database():
     ADMIN ONLY — a very destructive operation.
     """
 
-    load_dotenv()
-
-    uri = os.getenv("NEO4J_URI")
-    user = os.getenv("NEO4J_USER")
-    password = os.getenv("NEO4J_PASSWORD")
+    uri = settings.NEO4J_URI
+    user = settings.NEO4J_USER
+    password = settings.NEO4J_PASSWORD
 
     if not all([uri, user, password]):
         raise RuntimeError("Missing Neo4j admin credentials in environment")
 
     driver = None
     try:
-        driver = GraphDatabase.driver(uri, auth=(user, password))
+        driver = GraphDatabase.driver(uri, auth=(user, password),
+            connection_acquisition_timeout=600,  # 10 minutes
+            max_transaction_retry_time=300       # 5 minutes
+        )
         driver.verify_connectivity()
         print("****\n Connected as admin\n****")
 
@@ -34,8 +36,17 @@ def clear_database():
             print("Deleting all nodes and relationships...")
             # Use apoc.periodic.iterate for batching, which is safer for large databases
             # However, for a test setup, a simple DETACH DELETE is usually fine.
-            # Using DETACH DELETE for simplicity here.
-            session.run("MATCH (n) DETACH DELETE n")
+            # Use apoc.periodic.iterate for batching, which is safer for large databases
+            # This will delete nodes in batches, preventing memory exhaustion.
+            # Using a batch size of 1000 nodes, committing every 1000 operations.
+            session.run("""
+                CALL apoc.periodic.iterate(
+                    "MATCH (n) RETURN n",
+                    "DETACH DELETE n",
+                    {batchSize: 1000, parallel: false, iterateList: true}
+                ) YIELD batches, total
+                RETURN batches, total
+            """)
             
             # Verify deletion
             result = session.run("MATCH (n) RETURN count(n) as count").single()

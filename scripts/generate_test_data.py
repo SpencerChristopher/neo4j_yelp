@@ -5,7 +5,7 @@ import sys
 # Add the project root to the sys.path to allow importing settings
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.settings import DATA_DIR, BUSINESS_CSV, REVIEW_CSV, USER_CSV, CATEGORY_CSV, FRIEND_CSV
+from src.settings import settings
 
 # Configuration
 TEST_DATA_DIR = os.path.join(os.path.dirname(__file__), '../tests/data')
@@ -16,27 +16,27 @@ RANDOM_STATE = 42      # For reproducibility
 os.makedirs(TEST_DATA_DIR, exist_ok=True)
 
 csv_files_to_sample = {
-    "business": BUSINESS_CSV,
-    "review": REVIEW_CSV,
-    "user": USER_CSV,
-    "friend": FRIEND_CSV,
-    "category": CATEGORY_CSV,
+    "business": settings.BUSINESS_CSV,
+    "review": settings.REVIEW_CSV,
+    "user": settings.USER_CSV,
+    "friend": settings.FRIEND_CSV,
+    "category": settings.CATEGORY_CSV,
 }
 
 print(f"Generating sampled data for testing (sample percentage: {SAMPLE_PERCENTAGE * 100}%)...")
-print(f"Source data directory: {DATA_DIR}")
+print(f"Source data directory: {settings.DATA_DIR}")
 print(f"Destination test data directory: {TEST_DATA_DIR}")
 
-for key, filename in csv_files_to_sample.items():
-    input_path = os.path.join(DATA_DIR, filename)
-    output_filename = f"test.{filename}"
+for key, filename_path_obj in csv_files_to_sample.items():
+    input_path = settings.DATA_DIR / filename_path_obj
+    output_filename = f"test.{filename_path_obj.name}"
     output_path = os.path.join(TEST_DATA_DIR, output_filename)
 
     if not os.path.exists(input_path):
         print(f"Warning: Input file not found: {input_path}. Skipping.")
         continue
 
-    print(f"Processing {filename}...")
+    print(f"Processing {filename_path_obj.name}...")
     try:
         df = pd.read_csv(input_path)
         sampled_df = df.sample(frac=SAMPLE_PERCENTAGE, random_state=RANDOM_STATE)

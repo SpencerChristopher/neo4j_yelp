@@ -1,18 +1,17 @@
 import os
-from dotenv import load_dotenv
 from neo4j import GraphDatabase
 from neo4j.exceptions import AuthError, ClientError, ServiceUnavailable
+from src.settings import settings
 
 def setup_neo4j_database():
     """
     Sets up the Neo4j database with schema constraints/indexes using a single user (for Community Edition).
     """
-    load_dotenv()
 
     # Neo4j Credentials for Setup
-    neo4j_uri = os.getenv("NEO4J_URI")
-    neo4j_user = os.getenv("NEO4J_USER")
-    neo4j_password = os.getenv("NEO4J_PASSWORD")
+    neo4j_uri = settings.NEO4J_URI
+    neo4j_user = settings.NEO4J_USER
+    neo4j_password = settings.NEO4J_PASSWORD
 
     if not all([neo4j_uri, neo4j_user, neo4j_password]):
         print("Error: All Neo4j environment variables (URI, USER, PASSWORD) must be set in the .env file.")
