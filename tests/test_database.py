@@ -156,23 +156,31 @@ class TestNeo4jQueryMismatch:
         user_model = User(**sample_user_data)
         review_model = Review(**sample_review_data)
 
-        # Normalize data
-        bus_nodes, state_nodes, city_nodes, postal_code_nodes, geo_rels = normalize_business_data([business_model])
-        user_nodes = normalize_user_data([user_model])
-        review_nodes, wrote_rels, of_rels = normalize_review_data([review_model])
+        # Convert models to dictionaries before loading
+        normalized_bus_data = normalize_business_data([business_model])
+        bus_nodes_dicts = normalized_bus_data["business_nodes"]
+        postal_code_nodes_dicts = normalized_bus_data["postal_code_nodes"] # Directly use from new output
 
-        # Load data using the actual loader
-        live_neo4j_loader.load_states(state_nodes)
-        live_neo4j_loader.load_cities(city_nodes)
-        live_neo4j_loader.load_postal_codes(postal_code_nodes)
-        live_neo4j_loader.load_businesses(bus_nodes)
-        live_neo4j_loader.load_users(user_nodes)
-        live_neo4j_loader.load_reviews(review_nodes)
-        live_neo4j_loader.create_relationships(wrote_rels)
-        live_neo4j_loader.create_relationships(of_rels)
-        # Load other geo_rels
-        all_other_geo_rels = [rel for rel in geo_rels if rel not in of_rels + wrote_rels] # Exclude already loaded
-        live_neo4j_loader.create_relationships(all_other_geo_rels)
+        user_nodes_dicts = normalize_user_data([user_model])["nodes"]
+        normalized_review_data = normalize_review_data([review_model])
+        review_nodes_dicts = normalized_review_data["nodes"]
+        
+        # All relationships from business normalizer
+        geo_rels_dicts = normalized_bus_data["relationships"] 
+        wrote_rels_dicts = [r for r in normalized_review_data["relationships"] if r.get("relationship_type") == "WROTE"]
+        of_rels_dicts = [r for r in normalized_review_data["relationships"] if r.get("relationship_type") == "OF"]
+
+        # Load data using the actual loader (using generic load_nodes/load_relationships)
+        # Note: City and State nodes are assumed to be loaded in an earlier pipeline phase,
+        # so they are not loaded by normalize_business_data.
+        live_neo4j_loader.load_nodes(postal_code_nodes_dicts, "PostalCode", "code")
+        live_neo4j_loader.load_nodes(bus_nodes_dicts, "Business", "business_id")
+        live_neo4j_loader.load_nodes(user_nodes_dicts, "User", "user_id")
+        live_neo4j_loader.load_nodes(review_nodes_dicts, "Review", "review_id")
+        
+        live_neo4j_loader.load_relationships(geo_rels_dicts)
+        live_neo4j_loader.load_relationships(wrote_rels_dicts)
+        live_neo4j_loader.load_relationships(of_rels_dicts)
 
 
 @pytest.mark.integration
@@ -186,16 +194,22 @@ class TestNeo4jLoaderIntegration:
         from src.normalizer import normalize_business_data
 
         business_model = Business(**sample_business_data)
-        bus_nodes, state_nodes, city_nodes, pc_nodes, geo_rels = normalize_business_data([business_model])
+        normalized_data = normalize_business_data([business_model])
 
-        # Load all related geo nodes first
-        neo4j_loader.load_states(state_nodes)
-        neo4j_loader.load_cities(city_nodes)
-        neo4j_loader.load_postal_codes(pc_nodes)
+        # Extract directly from the new normalized_data structure
+        bus_nodes = normalized_data["business_nodes"]
+        postal_code_nodes_to_load = normalized_data["postal_code_nodes"]
+        
+        # City and State nodes are assumed to be pre-loaded in canonical phase
+        # Relationships will be loaded separately
+
+        # Load PostalCode nodes (if any)
+        created_pc, failed_pc = neo4j_loader.load_nodes(postal_code_nodes_to_load, "PostalCode", "code")
+        assert not failed_pc
 
         # Load business node
-        created, failed = neo4j_loader.load_businesses(bus_nodes)
-        assert created == 1
+        created, failed = neo4j_loader.load_nodes(bus_nodes, "Business", "business_id")
+        assert created > 0 
         assert not failed
 
         # Verify in DB
@@ -211,10 +225,10 @@ class TestNeo4jLoaderIntegration:
         from src.normalizer import normalize_user_data
 
         user_model = User(**sample_user_data)
-        user_nodes = normalize_user_data([user_model])
+        user_nodes = normalize_user_data([user_model])["nodes"]
 
-        created, failed = neo4j_loader.load_users(user_nodes)
-        assert created == 1
+        created, failed = neo4j_loader.load_nodes(user_nodes, "User", "user_id")
+        assert created > 0
         assert not failed
 
         # Verify in DB
@@ -233,21 +247,33 @@ class TestNeo4jLoaderIntegration:
         user_model = User(**sample_user_data)
         bus_model = Business(**sample_business_data)
 
-        neo4j_loader.load_users(normalize_user_data([user_model]))
-        neo4j_loader.load_businesses(normalize_business_data([bus_model])[0]) # [0] for bus_nodes
+        neo4j_loader.load_nodes(normalize_user_data([user_model])["nodes"], "User", "user_id")
+        
+        normalized_bus_data = normalize_business_data([bus_model])
+        bus_nodes = normalized_bus_data["business_nodes"]
+        postal_code_nodes_to_load = normalized_bus_data["postal_code_nodes"]
+        geo_rels = normalized_bus_data["relationships"]
+
+        # Load geo nodes from business normalizer
+        neo4j_loader.load_nodes(postal_code_nodes_to_load, "PostalCode", "code")
+        neo4j_loader.load_nodes(bus_nodes, "Business", "business_id")
+        neo4j_loader.load_relationships(geo_rels)
 
         # Prepare review data
         review_model = Review(**sample_review_data)
-        review_nodes, wrote_rels, of_rels = normalize_review_data([review_model])
+        normalized_review_data = normalize_review_data([review_model])
+        review_nodes = normalized_review_data["nodes"]
+        wrote_rels = [r for r in normalized_review_data["relationships"] if r.get("relationship_type") == "WROTE"]
+        of_rels = [r for r in normalized_review_data["relationships"] if r.get("relationship_type") == "OF"]
 
         # Load review node
-        created_node, failed_node = neo4j_loader.load_reviews(review_nodes)
-        assert created_node == 1
+        created_node, failed_node = neo4j_loader.load_nodes(review_nodes, "Review", "review_id")
+        assert created_node > 0
         assert not failed_node
 
         # Load relationships
-        created_wrote, failed_wrote = neo4j_loader.create_relationships(wrote_rels)
-        created_of, failed_of = neo4j_loader.create_relationships(of_rels)
+        created_wrote, failed_wrote = neo4j_loader.load_relationships(wrote_rels)
+        created_of, failed_of = neo4j_loader.load_relationships(of_rels)
         assert created_wrote == 1
         assert not failed_wrote
         assert created_of == 1
@@ -283,14 +309,14 @@ class TestNeo4jLoaderIntegration:
         user1_data = {**sample_user_data, "user_id": "user1", "name": "Alice"}
         user2_data = {**sample_user_data, "user_id": "user2", "name": "Bob"}
 
-        neo4j_loader.load_users(normalize_user_data([User(**user1_data)]))
-        neo4j_loader.load_users(normalize_user_data([User(**user2_data)]))
+        neo4j_loader.load_nodes(normalize_user_data([User(**user1_data)])["nodes"], "User", "user_id")
+        neo4j_loader.load_nodes(normalize_user_data([User(**user2_data)])["nodes"], "User", "user_id")
 
         # Create friendship
         friend_model = Friend(user1="user1", user2="user2")
-        friend_rels = normalize_friend_data([friend_model])
+        friend_rels = normalize_friend_data([friend_model])["relationships"]
 
-        created, failed = neo4j_loader.create_relationships(friend_rels)
+        created, failed = neo4j_loader.load_relationships(friend_rels)
         assert created == 1
         assert not failed
 

@@ -2,18 +2,14 @@ import logging
 import os
 import json
 import pandas as pd
-from typing import Optional
+from typing import Optional, List, Dict, Any, Tuple, Type, Callable
 import time
 import gc
+import importlib
+from pathlib import Path # Added import
 
-from src.validator import (
-    validate_business_data,
-    validate_user_data,
-    validate_category_data,
-    validate_review_data,
-    validate_friend_data,
-)
-from src.normalizer import (
+from src.validator import validate_records # Only import generic now
+from src.normalizer import ( # Will simplify imports later, but keep for now until specific calls are removed
     normalize_business_data,
     normalize_user_data,
     normalize_category_data,
@@ -21,7 +17,7 @@ from src.normalizer import (
     normalize_friend_data,
 )
 from src.loader import Neo4jLoader
-from src.settings import settings
+from src.settings import settings, PhaseConfig # Import PhaseConfig
 
 # Setup logging first
 from src.logging_config import setup_logging
@@ -72,6 +68,267 @@ class PipelineStats:
         }
 
 
+class PipelineRunner:
+    def __init__(self, loader: Neo4jLoader, stats: PipelineStats):
+        self.loader = loader
+        self.stats = stats
+        self.dead_letter_max_records_per_batch = settings.pipeline.dead_letter_max_records_per_batch
+        self.models = self._load_models()
+
+    def _load_models(self) -> Dict[str, Type]:
+        """Dynamically load Pydantic models from src.models."""
+        models_module = importlib.import_module("src.models")
+        return {name: getattr(models_module, name) for name in models_module.__all__}
+
+    def _get_callable(self, module_name: str, func_name: str) -> Callable:
+        """Dynamically load a function from a module."""
+        module = importlib.import_module(module_name)
+        return getattr(module, func_name)
+
+    def _load_generic_nodes(self, normalized_data: Dict[str, List[Dict[str, Any]]], phase_config: PhaseConfig, raw_records: List[Dict[str, Any]]) -> Tuple[int, int, List[Dict[str, Any]]]:
+        """Loads nodes using the generic load_nodes method, and relationships if present."""
+        total_nodes_created = 0
+        total_rels_created = 0
+        total_failed_records = []
+
+        if normalized_data["nodes"]:
+            nodes_created, failed = self.loader.load_nodes(
+                normalized_data["nodes"], phase_config.node_label, phase_config.id_property
+            )
+            total_nodes_created += nodes_created
+            total_failed_records.extend(failed)
+        
+        if normalized_data["relationships"]:
+            rels_created, failed = self.loader.load_relationships(normalized_data["relationships"])
+            total_rels_created += rels_created
+            total_failed_records.extend(failed)
+
+        return total_nodes_created, total_rels_created, total_failed_records
+
+    def _load_relationships_only(self, normalized_data: Dict[str, List[Dict[str, Any]]], phase_config: PhaseConfig, raw_records: List[Dict[str, Any]]) -> Tuple[int, int, List[Dict[str, Any]]]:
+        """Loads only relationships."""
+        created_rels = 0
+        failed_records = []
+        if normalized_data["relationships"]:
+            created_rels, failed_records = self.loader.load_relationships(normalized_data["relationships"])
+        return 0, created_rels, failed_records
+
+    def _load_nodes_and_relationships(self, normalized_data: Dict[str, List[Dict[str, Any]]], phase_config: PhaseConfig, raw_records: List[Dict[str, Any]]) -> Tuple[int, int, List[Dict[str, Any]]]:
+        """Loads both nodes and relationships."""
+        total_nodes_created = 0
+        total_rels_created = 0
+        total_failed_records = []
+
+        # Load nodes first
+        if normalized_data["nodes"]:
+            nodes_created, failed = self.loader.load_nodes(
+                normalized_data["nodes"], phase_config.node_label, phase_config.id_property
+            )
+            total_nodes_created += nodes_created
+            total_failed_records.extend(failed)
+        
+        # Then load relationships
+        if normalized_data["relationships"]:
+            rels_created, failed = self.loader.load_relationships(normalized_data["relationships"])
+            total_rels_created += rels_created
+            total_failed_records.extend(failed)
+            
+        return total_nodes_created, total_rels_created, total_failed_records
+
+    def _load_complex_business_data(self, normalized_data: Dict[str, List[Dict[str, Any]]], phase_config: PhaseConfig, raw_records: List[Dict[str, Any]]) -> Tuple[int, int, List[Dict[str, Any]]]:
+        """
+        Handles loading for the Business phase, which involves multiple node types
+        and relationships from a single normalization pass.
+        """
+        total_nodes_created = 0
+        total_rels_created = 0
+        total_failed_records = []
+
+        # The normalizer now returns distinct lists: business_nodes, postal_code_nodes, relationships
+        business_nodes_to_load = normalized_data.get("business_nodes", [])
+        postal_code_nodes_to_load = normalized_data.get("postal_code_nodes", [])
+        relationships_to_load = normalized_data.get("relationships", [])
+
+        # Load Business Nodes
+        if business_nodes_to_load:
+            created, failed = self.loader.load_nodes(
+                business_nodes_to_load, "Business", "business_id"
+            )
+            total_nodes_created += created
+            total_failed_records.extend(failed)
+
+        # Load PostalCode Nodes (City and State are assumed pre-loaded)
+        if postal_code_nodes_to_load:
+            created, failed = self.loader.load_nodes(
+                postal_code_nodes_to_load, "PostalCode", "code"
+            )
+            total_nodes_created += created
+            total_failed_records.extend(failed)
+
+        # Load all relationships
+        if relationships_to_load:
+            created, failed = self.loader.load_relationships(relationships_to_load)
+            total_rels_created += created
+            total_failed_records.extend(failed)
+            
+        return total_nodes_created, total_rels_created, total_failed_records
+
+    def run_phase(self, phase_config: PhaseConfig, max_batches: Optional[int] = None):
+        self.stats.log_phase_start(phase_config.name)
+        logger.info(f"Loading {phase_config.name} (Phase {settings.pipeline.phases.index(phase_config) + 1} of {len(settings.pipeline.phases)})...")
+
+        data_path = Path(settings.DATA_DIR) / phase_config.csv_file_name
+
+        if not data_path.exists():
+            logger.error(f"CSV not found for phase {phase_config.name}: {data_path}")
+            return
+
+        validator_func = self._get_callable("src.validator", phase_config.validator_func_name)
+        normalizer_func = self._get_callable("src.normalizer", phase_config.normalizer_func_name)
+        
+        pydantic_model = self.models.get(phase_config.model_name)
+        if pydantic_model is None:
+            logger.error(f"Pydantic model '{phase_config.model_name}' not found for phase {phase_config.name}")
+            return
+
+        batch_num = 0
+        with pd.read_csv(data_path, chunksize=phase_config.chunk_size) as data_iter:
+            for chunk in data_iter:
+                batch_num += 1
+                if max_batches and batch_num > max_batches:
+                    break
+
+                self.stats.total_rows_processed += len(chunk)
+                raw_records = chunk.replace({float('nan'): None}).to_dict(orient="records")
+
+                # Validate
+                # validator_func now expects Pydantic model and entity name
+                valid_records, invalid_records = validator_func(
+                    raw_records, pydantic_model, phase_config.name, phase_config.id_property
+                )
+                self.stats.validation_failures += len(invalid_records)
+                _write_dead_letters(invalid_records, self.dead_letter_max_records_per_batch) # Pass max_records
+
+                if not valid_records:
+                    logger.warning(f"Batch {batch_num} for {phase_config.name}: No valid records after validation")
+                    continue
+
+                # Normalize
+                # normalizer_func now returns {"nodes": [...], "relationships": [...]}
+                normalized_data = normalizer_func(valid_records) 
+
+                # Load
+                created_nodes_count = 0
+                created_rels_count = 0
+                failed_records_in_batch = [] # Track original raw records that failed to load
+
+                _loader_dispatch = {
+                    "load_nodes": self._load_generic_nodes,
+                    "load_relationships": self._load_relationships_only,
+                    "load_nodes_and_relationships": self._load_nodes_and_relationships,
+                    "process_business_data": self._load_complex_business_data, # For the Business phase
+                }
+
+                loader_strategy = _loader_dispatch.get(phase_config.loader_method_name)
+
+                if loader_strategy:
+                    nodes_created, rels_created, batch_failed_records = loader_strategy(
+                        normalized_data, phase_config, raw_records # Pass raw_records for dead-letter fallback
+                    )
+                    created_nodes_count += nodes_created
+                    created_rels_count += rels_created
+                    failed_records_in_batch.extend(batch_failed_records)
+                else:
+                    logger.error(f"Unknown loader method specified: {phase_config.loader_method_name} for phase {phase_config.name}")
+                    failed_records_in_batch.extend(raw_records) # Mark all raw records as failed
+
+                if failed_records_in_batch:
+                    self.stats.failed_batches += 1
+                    # Note: We are not counting individual failed records from loader here,
+                    # but rather marking the whole batch as failed if any loader operation failed.
+                    # The loader's dead letter mechanism handles individual records.
+
+                if failed_records_in_batch:
+                    self.stats.failed_batches += 1
+                    # Note: We are not counting individual failed records from loader here,
+                    # but rather marking the whole batch as failed if any loader operation failed.
+                    # The loader's dead letter mechanism handles individual records.
+                else:
+                    self.stats.successful_batches += 1
+                    self.stats.total_nodes_created += created_nodes_count
+                    self.stats.total_rels_created += created_rels_count
+
+
+                logger.debug(f"Processed {batch_num * phase_config.chunk_size} records for {phase_config.name} so far")
+
+        self.stats.log_phase_end(
+            phase_config.name,
+            nodes_created=created_nodes_count,
+            rels_created=created_rels_count
+        )
+
+
+    def run_pipeline(self, max_batches: Optional[int] = None):
+        """Orchestrates the entire ETL pipeline based on settings."""
+
+        # Clear dead letter file
+        os.makedirs(os.path.dirname(settings.DEAD_LETTER_FILE), exist_ok=True)
+        with open(settings.DEAD_LETTER_FILE, "w") as f:
+            f.write("")  # Clear file
+
+        try:
+            with self.loader:
+                for phase_config in settings.pipeline.phases:
+                    self.run_phase(phase_config, max_batches)
+
+                logger.info("Performing final data integrity checks...")
+                verify_data_integrity(self.loader)
+
+                logger.info("Validating review counts...")
+                validate_review_counts(self.loader, sample_size=1000)
+
+        except Exception as e:
+            logger.critical(f"FATAL: Pipeline failed with error: {e}", exc_info=True)
+            raise
+
+        finally:
+            # Log final statistics
+            summary = self.stats.get_summary()
+            logger.info(f"""
+            PIPELINE COMPLETION REPORT:
+            ===========================
+            Total Time: {summary['total_time_seconds']:.2f} seconds
+            Throughput: {summary['throughput_rows_per_sec']:.2f} rows/second
+
+            Batches:
+              Successful: {summary['successful_batches']}
+              Failed: {summary['failed_batches']}
+
+            Failures:
+              Validation Errors: {summary['validation_failures']}
+              Batch Processing Errors: {summary['batch_failures']}
+
+            Totals:
+              Rows Processed: {summary['total_rows_processed']}
+              Nodes Created: {summary['total_nodes_created']}
+              Relationships Created: {summary['total_rels_created']}
+
+            Phase Breakdown:
+            """)
+
+            for phase, phase_data in summary['phases'].items():
+                duration = phase_data.get('duration', 0)
+                nodes = phase_data.get('nodes', 0)
+                rels = phase_data.get('rels', 0)
+                logger.info(f"  {phase}: {duration:.2f}s | Nodes: {nodes} | Rels: {rels}")
+
+            # Write statistics to file
+            stats_log_file = settings.LOG_FILE.parent / "pipeline_stats.json"
+            with open(stats_log_file, "w") as f:
+                json.dump(summary, f, indent=2)
+
+            logger.info("ETL pipeline finished successfully")
+
 def verify_data_integrity(loader):
     """Perform comprehensive data integrity checks."""
     checks = [
@@ -83,7 +340,7 @@ def verify_data_integrity(loader):
             MATCH (b:Business)
             OPTIONAL MATCH (b)<-[:OF]-(r:Review)
             WITH b, b.review_count as expected, count(r) as actual
-            WHERE expected IS NOT NULL AND expected != actual
+            WHERE expected IS NOT NULL AND expected <> actual
             RETURN count(b) as mismatched_count
         """),
 
@@ -133,6 +390,7 @@ def verify_data_integrity(loader):
                 logger.error(f"Failed integrity check '{check_name}': {e}")
 
 
+
 def validate_review_counts(loader, sample_size=100):
     """
     Validate that business.review_count matches actual connected reviews.
@@ -144,7 +402,7 @@ def validate_review_counts(loader, sample_size=100):
     WITH b
     OPTIONAL MATCH (b)<-[:OF]-(r:Review)
     WITH b, b.review_count as expected, count(r) as actual
-    WHERE expected != actual
+    WHERE expected <> actual
     RETURN b.business_id, b.name, expected, actual
     LIMIT $sample_size
     """
@@ -168,371 +426,69 @@ def validate_review_counts(loader, sample_size=100):
 
 
 def run_pipeline(max_batches: Optional[int] = None):
-    """Main ETL pipeline with optimal loading order and immediate relationship creation."""
+    """Main ETL pipeline orchestrated by PipelineRunner."""
+    logger.info("Starting Yelp ETL pipeline with optimal loading order (orchestrated by PipelineRunner)")
 
     stats = PipelineStats()
-    logger.info("Starting Yelp ETL pipeline with optimal loading order")
-
-    # Initialize dead letter queue
-    os.makedirs(os.path.dirname(settings.DEAD_LETTER_FILE), exist_ok=True)
-    with open(settings.DEAD_LETTER_FILE, "w") as f:
-        f.write("")  # Clear file
-
     try:
-        with Neo4jLoader(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD) as loader:
-
-            # --- PHASE 1: User Nodes (NO relationships yet) ---
-            stats.log_phase_start("Phase 1: Users")
-            user_path = settings.DATA_DIR / settings.USER_CSV
-
-            if not os.path.exists(user_path):
-                logger.error(f"User CSV not found: {user_path}")
-                return
-
-            logger.info("Loading User nodes (Phase 1 of 5)...")
-
-            user_chunk_size = 500
-            user_iter = pd.read_csv(user_path, chunksize=user_chunk_size)
-
-            for batch_num, chunk in enumerate(user_iter, start=1):
-                if max_batches and batch_num > max_batches:
-                    break
-
-                stats.total_rows_processed += len(chunk)
-                raw_records = chunk.replace({float('nan'): None}).to_dict(orient="records")
-                valid, invalid = validate_user_data(raw_records)
-                stats.validation_failures += len(invalid)
-                _write_dead_letters(invalid)
-
-                if not valid:
-                    continue
-
-                user_nodes = normalize_user_data(valid)
-                created, failed = loader.load_users(user_nodes)
-
-                if failed:
-                    stats.failed_batches += 1
-                    stats.batch_failures += len(failed)
-                else:
-                    stats.successful_batches += 1
-
-                # Clean memory
-                if batch_num % 20 == 0:
-                    gc.collect()
-                    logger.debug(f"Loaded {batch_num * user_chunk_size} users so far")
-
-            logger.info("User nodes loaded.")
-            stats.log_phase_end("Phase 1: Users")
-
-            # --- PHASE 2: Business Nodes with Immediate Geographic Relationships ---
-            stats.log_phase_start("Phase 2: Businesses with Geographic Relationships")
-            business_path = settings.DATA_DIR / settings.BUSINESS_CSV
-
-            if not os.path.exists(business_path):
-                logger.error(f"Business CSV not found: {business_path}")
-                return
-
-            logger.info("Loading businesses with immediate geographic relationships (Phase 2 of 5)...")
-
-            business_chunk_size = 200
-            business_iter = pd.read_csv(business_path, chunksize=business_chunk_size)
-
-            for batch_num, chunk in enumerate(business_iter, start=1):
-                if max_batches and batch_num > max_batches:
-                    break
-
-                stats.total_rows_processed += len(chunk)
-                logger.debug(f"Processing business batch {batch_num} ({len(chunk)} records)")
-
-                raw_records = chunk.replace({float('nan'): None}).to_dict(orient="records")
-
-                # Debug: Check first record
-                if batch_num == 1 and raw_records:
-                    first_record = raw_records[0]
-                    logger.debug(f"First business record: business_id={first_record.get('business_id')}, "
-                                 f"state='{first_record.get('state')}', city='{first_record.get('city')}'")
-
-                # Validate
-                valid, invalid = validate_business_data(raw_records)
-                stats.validation_failures += len(invalid)
-                _write_dead_letters(invalid)
-
-                if not valid:
-                    logger.warning(f"Batch {batch_num}: No valid records after validation")
-                    continue
-
-                # Normalize
-                bus_nodes, state_nodes, city_nodes, postal_code_nodes, geo_rels = normalize_business_data(valid)
-
-                logger.info(f"Batch {batch_num}: Normalized - {len(bus_nodes)} businesses, "
-                            f"{len(state_nodes)} states, {len(city_nodes)} cities, "
-                            f"{len(postal_code_nodes)} postal codes")
-
-                # Load businesses WITH geographic relationships in one operation
-                if bus_nodes:
-                    created_business, failed_business = loader.load_businesses_complete(bus_nodes)
-
-                    if created_business:
-                        logger.info(f"Created {created_business} businesses with relationships")
-                        stats.successful_batches += 1
-                    else:
-                        logger.warning(f"Batch {batch_num}: Failed to create businesses")
-                        stats.failed_batches += 1
-
-                    if failed_business:
-                        logger.error(f"Batch {batch_num}: {len(failed_business)} business records failed")
-                        stats.batch_failures += len(failed_business)
-
-                # Clean up memory
-                del raw_records, valid, bus_nodes, state_nodes, city_nodes, postal_code_nodes, geo_rels
-                if batch_num % 10 == 0:
-                    gc.collect()
-                    logger.debug(f"Processed {batch_num * business_chunk_size} businesses so far")
-
-            logger.info("Business nodes with geographic relationships loaded.")
-            stats.log_phase_end("Phase 2: Businesses with Geographic Relationships")
-
-            # --- PHASE 3: Category Nodes and Business-Category Relationships ---
-            stats.log_phase_start("Phase 3: Categories and Business-Category Relationships")
-            category_path = settings.DATA_DIR / settings.CATEGORY_CSV
-
-            if not os.path.exists(category_path):
-                logger.error(f"Category CSV not found: {category_path}")
-                return
-
-            logger.info("Loading categories and business-category relationships (Phase 3 of 5)...")
-
-            category_chunk_size = 1000
-            category_iter = pd.read_csv(category_path, chunksize=category_chunk_size)
-
-            for batch_num, chunk in enumerate(category_iter, start=1):
-                if max_batches and batch_num > max_batches:
-                    break
-
-                stats.total_rows_processed += len(chunk)
-                raw_records = chunk.replace({float('nan'): None}).to_dict(orient="records")
-                valid, invalid = validate_category_data(raw_records)
-                stats.validation_failures += len(invalid)
-                _write_dead_letters(invalid)
-
-                if not valid:
-                    continue
-
-                cat_nodes, cat_rels = normalize_category_data(valid)
-
-                # Load category nodes
-                if cat_nodes:
-                    created_cats, failed_cats = loader.load_categories(cat_nodes)
-
-                # Load business-category relationships
-                if cat_rels:
-                    created_rels, failed_rels = loader.create_relationships(cat_rels)
-                    stats.total_rels_created += created_rels
-
-                    if failed_rels:
-                        stats.failed_batches += 1
-                        stats.batch_failures += len(failed_rels)
-                    else:
-                        stats.successful_batches += 1
-
-            logger.info("Category nodes and business-category relationships loaded.")
-            stats.log_phase_end("Phase 3: Categories and Business-Category Relationships")
-
-            # --- PHASE 4: Review Nodes with Immediate Relationships ---
-            stats.log_phase_start("Phase 4: Reviews with Immediate User/Business Relationships")
-            review_path = settings.DATA_DIR / settings.REVIEW_CSV
-
-            if not os.path.exists(review_path):
-                logger.error(f"Review CSV not found: {review_path}")
-                return
-
-            logger.info("Loading review nodes with immediate relationships (Phase 4 of 5)...")
-
-            review_chunk_size = 300
-            review_iter = pd.read_csv(review_path, chunksize=review_chunk_size)
-
-            for batch_num, chunk in enumerate(review_iter, start=1):
-                if max_batches and batch_num > max_batches:
-                    break
-
-                stats.total_rows_processed += len(chunk)
-                raw_records = chunk.replace({float('nan'): None}).to_dict(orient="records")
-
-                # Debug: Check first review
-                if batch_num == 1 and raw_records:
-                    first_review = raw_records[0]
-                    logger.debug(f"First review: review_id={first_review.get('review_id')}, "
-                                 f"user_id={first_review.get('user_id')}, "
-                                 f"business_id={first_review.get('business_id')}")
-
-                valid, invalid = validate_review_data(raw_records)
-                stats.validation_failures += len(invalid)
-                _write_dead_letters(invalid)
-
-                if not valid:
-                    continue
-
-                review_nodes, wrote_rels, of_rels = normalize_review_data(valid)
-
-                # Load reviews (just nodes)
-                created_reviews, failed_reviews = loader.load_reviews(review_nodes)
-
-                # Create WROTE relationships (User→Review) - USERS MUST EXIST
-                if wrote_rels:
-                    created_wrote, failed_wrote = loader.create_relationships(wrote_rels)
-                    if created_wrote:
-                        stats.total_rels_created += created_wrote
-                        logger.debug(f"Created {created_wrote} WROTE relationships")
-
-                # Create OF relationships (Review→Business) - BUSINESSES MUST EXIST
-                if of_rels:
-                    created_of, failed_of = loader.create_relationships(of_rels)
-                    if created_of:
-                        stats.total_rels_created += created_of
-                        logger.debug(f"Created {created_of} OF relationships")
-
-                if any([failed_reviews, failed_wrote, failed_of]):
-                    stats.failed_batches += 1
-                    stats.batch_failures += sum([len(f) for f in [failed_reviews, failed_wrote, failed_of] if f])
-                else:
-                    stats.successful_batches += 1
-
-                # Clean memory
-                del raw_records, valid, review_nodes, wrote_rels, of_rels
-                if batch_num % 15 == 0:
-                    gc.collect()
-                    logger.debug(f"Processed {batch_num * review_chunk_size} reviews so far")
-
-            logger.info("Review nodes with relationships loaded.")
-            stats.log_phase_end("Phase 4: Reviews with Immediate User/Business Relationships")
-
-            # --- PHASE 5: Friend Relationships ---
-            stats.log_phase_start("Phase 5: Friend Relationships")
-
-            logger.info("Loading friend relationships (Phase 5 of 5)...")
-            friend_path = settings.DATA_DIR / settings.FRIEND_CSV
-
-            if not os.path.exists(friend_path):
-                logger.error(f"Friend CSV not found: {friend_path}")
-                return
-
-            friend_iter = pd.read_csv(friend_path, chunksize=500)
-
-            for batch_num, chunk in enumerate(friend_iter, start=1):
-                if max_batches and batch_num > max_batches:
-                    break
-
-                stats.total_rows_processed += len(chunk)
-                raw_records = chunk.replace({float('nan'): None}).to_dict(orient="records")
-                valid, invalid = validate_friend_data(raw_records)
-                stats.validation_failures += len(invalid)
-                _write_dead_letters(invalid)
-
-                if not valid:
-                    continue
-
-                friend_rels = normalize_friend_data(valid)
-                created, failed = loader.create_relationships(friend_rels)
-                stats.total_rels_created += created
-
-                if failed:
-                    stats.failed_batches += 1
-                    stats.batch_failures += len(failed)
-                else:
-                    stats.successful_batches += 1
-
-                if batch_num % 10 == 0:
-                    logger.debug(f"Processed {batch_num * 500} friend relationships so far")
-
-            logger.info("Friend relationships loaded.")
-            stats.log_phase_end("Phase 5: Friend Relationships")
-
-            # --- FINAL VERIFICATION ---
-            logger.info("Performing final data integrity checks...")
-            verify_data_integrity(loader)
-
-            # Optional: Detailed review count validation
-            logger.info("Validating review counts...")
-            validate_review_counts(loader, sample_size=1000)
-
+        loader = Neo4jLoader()
+        runner = PipelineRunner(loader, stats)
+        runner.run_pipeline(max_batches)
     except Exception as e:
-        logger.critical(f"FATAL: Pipeline failed with error: {e}", exc_info=True)
+        logger.critical(f"FATAL: Pipeline failed during initialization or execution: {e}", exc_info=True)
         raise
 
-    finally:
-        # Log final statistics
-        summary = stats.get_summary()
-        logger.info(f"""
-        PIPELINE COMPLETION REPORT:
-        ===========================
-        Total Time: {summary['total_time_seconds']:.2f} seconds
-        Throughput: {summary['throughput_rows_per_sec']:.2f} rows/second
+def _default_json_serializer(obj):
+    """Helper to serialize non-JSON-serializable objects (like Exceptions, Paths, Pydantic models)."""
+    from pydantic import BaseModel # Import locally to avoid circular dependencies at module level
+    if isinstance(obj, (Path, Exception)):
+        return str(obj)
+    if isinstance(obj, BaseModel):
+        return obj.model_dump()
+    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
 
-        Batches:
-          Successful: {summary['successful_batches']}
-          Failed: {summary['failed_batches']}
-
-        Failures:
-          Validation Errors: {summary['validation_failures']}
-          Batch Processing Errors: {summary['batch_failures']}
-
-        Totals:
-          Rows Processed: {summary['total_rows_processed']}
-          Relationships Created: {summary['total_rels_created']}
-
-        Phase Breakdown:
-        """)
-
-        for phase, phase_data in summary['phases'].items():
-            duration = phase_data.get('duration', 0)
-            logger.info(f"  {phase}: {duration:.2f}s")
-
-        # Write statistics to file
-        with open("logs/pipeline_stats.json", "w") as f:
-            json.dump(summary, f, indent=2)
-
-        logger.info("ETL pipeline finished successfully")
+def _standardize_error(error_item: Any) -> Dict[str, Any]:
+    """Standardize a single error item into a serializable dictionary."""
+    if isinstance(error_item, Exception):
+        return {"type": type(error_item).__name__, "msg": str(error_item)}
+    elif isinstance(error_item, dict):
+        return error_item  # Assume Pydantic error dicts are already serializable
+    else:
+        return {"type": "unknown_error_format", "msg": str(error_item)}
 
 
-def _write_dead_letters(records):
-    """Write validation errors to dead letter queue with truncation for memory safety."""
+def _write_dead_letters(records, max_records_per_batch: int = 500):
+    """Write validation errors to dead letter queue with robust serialization."""
     if not records:
         return
 
-    MAX_RECORDS_PER_BATCH = 500  # Reduced from 1000
-    records_to_write = records[:MAX_RECORDS_PER_BATCH]
+    os.makedirs(os.path.dirname(settings.DEAD_LETTER_FILE), exist_ok=True) # Ensure directory exists
 
     with open(settings.DEAD_LETTER_FILE, "a", encoding="utf-8") as f:
-        for r in records_to_write:
+        for r in records[:max_records_per_batch]:
             serializable_record = r.copy()
 
-            # Process errors to make them JSON serializable
+            # Standardize 'errors' field to be a list of serializable dicts
             if "errors" in serializable_record:
-                errors = serializable_record["errors"]
-
-                if isinstance(errors, Exception):
-                    serializable_record["errors"] = str(errors)[:500]
-                elif isinstance(errors, list):
-                    processed_errors = []
-                    for error_item in errors:
-                        if isinstance(error_item, Exception):
-                            processed_errors.append(str(error_item)[:500])
-                        elif isinstance(error_item, dict):
-                            if "ctx" in error_item and "error" in error_item["ctx"]:
-                                if isinstance(error_item["ctx"]["error"], Exception):
-                                    error_item["ctx"]["error"] = str(error_item["ctx"]["error"])[:500]
-                            processed_errors.append(error_item)
-                        else:
-                            processed_errors.append(str(error_item)[:500] if error_item else "")
-                    serializable_record["errors"] = processed_errors
-
+                errors_raw = serializable_record["errors"]
+                processed_errors = []
+                if not isinstance(errors_raw, list):
+                    errors_raw = [errors_raw] # Ensure it's always iterable
+                processed_errors = [_standardize_error(err_item) for err_item in errors_raw]
+                serializable_record["errors"] = processed_errors
+            
             # Truncate record data
             if "record" in serializable_record and isinstance(serializable_record["record"], dict):
                 serializable_record["record"] = {
-                    k: str(v)[:200] for k, v in serializable_record["record"].items()
+                    k: str(v)[:200] if not isinstance(v, (int, float, bool, type(None))) else v
+                    for k, v in serializable_record["record"].items()
                 }
 
-            f.write(json.dumps(serializable_record) + "\n")
+            try:
+                f.write(json.dumps(serializable_record, ensure_ascii=False, default=_default_json_serializer) + "\n")
+            except Exception as e:
+                logger.error(f"Failed to serialize record to dead letter: {serializable_record} - {e}", exc_info=True)
+                f.write(json.dumps({"unserializable_record_fallback": str(serializable_record), "error": str(e)}, ensure_ascii=False) + "\n")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
+from pydantic import Field, BaseModel
+from typing import Callable, Type, Optional
 
 
 class Settings(BaseSettings):
@@ -27,6 +28,162 @@ class Settings(BaseSettings):
     LOG_FILE: Path = Field(Path("logs/elt_process.log"), description="Path for the ETL process log file")
     DEAD_LETTER_FILE: Path = Field(Path("logs/dead_letters.jsonl"), description="Path for the dead letter queue file")
 
+
+class PhaseConfig(BaseModel):
+    name: str
+    csv_file_name: Path # Renamed from csv_file to avoid confusion with DATA_DIR
+    chunk_size: int
+    validator_func_name: str  # Name of the validation function from src.validator
+    normalizer_func_name: str  # Name of the normalization function from src.normalizer
+    loader_method_name: str  # Name of the method on Neo4jLoader to call (e.g., 'load_users')
+    model_name: str  # Name of the Pydantic model (e.g., 'User')
+    node_label: Optional[str] = None # Added field
+    id_property: Optional[str] = None # Added field
+
+class PipelineConfig(BaseModel):
+    phases: list[PhaseConfig]
+    dead_letter_max_records_per_batch: int = 500
+
+class Settings(BaseSettings):
+    # Pydantic-settings will automatically load environment variables from .env
+    # and respect prefixes (e.g., NEO4J_URI, APP_NAME_NEO4J_URI)
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # Neo4j Credentials
+    NEO4J_URI: str = Field("bolt://localhost:7687", description="Neo4j connection URI")
+    NEO4J_USER: str = Field("neo4j", description="Neo4j username")
+    NEO4J_PASSWORD: str | None = Field(None, description="Neo4j password")
+
+    # Data File Paths
+    DATA_DIR: Path = Field(Path("Data"), description="Directory containing source data files")
+    BUSINESS_CSV: Path = Field(Path("business_small.csv"), description="Filename for business data")
+    BUSINESS_CITY_CSV: Path = Field(Path("business_city.csv"), description="Filename for business city data")
+    REVIEW_CSV: Path = Field(Path("review_small.csv"), description="Filename for review data")
+    USER_CSV: Path = Field(Path("user_small.csv"), description="Filename for user data")
+    CATEGORY_CSV: Path = Field(Path("business_categories_small.csv"), description="Filename for category data")
+    FRIEND_CSV: Path = Field(Path("user_friendship.csv"), description="Filename for user friendship data")
+
+    # ETL Configuration
+    BATCH_SIZE: int = Field(1000, description="Batch size for database operations")
+    LOG_FILE: Path = Field(Path("logs/elt_process.log"), description="Path for the ETL process log file")
+    DEAD_LETTER_FILE: Path = Field(Path("logs/dead_letters.jsonl"), description="Path for the dead letter queue file")
+
+    NEO4J_CONSTRAINTS_AND_INDEXES: list[str] = Field(
+        [
+            # --- Business ---
+            "CREATE CONSTRAINT business_id_unique IF NOT EXISTS "
+            "FOR (b:Business) REQUIRE b.business_id IS UNIQUE",
+
+            "CREATE INDEX business_name_idx IF NOT EXISTS "
+            "FOR (b:Business) ON (b.name)",
+
+            # --- User ---
+            "CREATE CONSTRAINT user_id_unique IF NOT EXISTS "
+            "FOR (u:User) REQUIRE u.user_id IS UNIQUE",
+
+            "CREATE INDEX user_name_idx IF NOT EXISTS "
+            "FOR (u:User) ON (u.name)",
+
+            # --- Review ---
+            "CREATE CONSTRAINT review_id_unique IF NOT EXISTS "
+            "FOR (r:Review) REQUIRE r.review_id IS UNIQUE",
+
+            "CREATE INDEX review_date_idx IF NOT EXISTS "
+            "FOR (r:Review) ON (r.date)",
+
+            # --- State ---
+            "CREATE CONSTRAINT state_code_unique IF NOT EXISTS "
+            "FOR (s:State) REQUIRE s.code IS UNIQUE",
+
+            # --- City ---
+            "CREATE CONSTRAINT city_name_state_unique IF NOT EXISTS "
+            "FOR (c:City) REQUIRE (c.name, c.state_code) IS UNIQUE",
+
+            # --- Postal Code ---
+            "CREATE CONSTRAINT postal_code_unique IF NOT EXISTS "
+            "FOR (p:PostalCode) REQUIRE p.code IS UNIQUE",
+
+            # --- Category ---
+            "CREATE CONSTRAINT category_name_unique IF NOT EXISTS "
+            "FOR (c:Category) REQUIRE c.name IS UNIQUE"
+        ],
+        description="Cypher statements to create constraints and indexes in Neo4j"
+    )
+
+    pipeline: PipelineConfig = Field(
+        default_factory=lambda: PipelineConfig(
+            phases=[
+                PhaseConfig(
+                    name="Users",
+                    csv_file_name=Path("user_small.csv"),
+                    chunk_size=500,
+                    validator_func_name="validate_user_data",
+                    normalizer_func_name="normalize_user_data",
+                    loader_method_name="load_nodes", # Changed to generic load_nodes
+                    model_name="User",
+                    node_label="User", # Added
+                    id_property="user_id" # Added
+                ),
+                PhaseConfig( # New Canonical City/State Phase
+                    name="Canonical City/State",
+                    csv_file_name=Path("business_city.csv"),
+                    chunk_size=100, # Assuming business_city.csv is small
+                    validator_func_name="validate_city_state_data", # Will create this in src/validator.py
+                    normalizer_func_name="normalize_canonical_city_state_data",
+                    loader_method_name="load_nodes_and_relationships", # New general-purpose loader method
+                    model_name="City", # Using City model for validation/normalization base
+                    node_label="City",
+                    id_property="name"
+                ),
+                PhaseConfig(
+                    name="Businesses with Geographic Relationships",
+                    csv_file_name=Path("business_small.csv"),
+                    chunk_size=200,
+                    validator_func_name="validate_business_data",
+                    normalizer_func_name="normalize_business_data",
+                    loader_method_name="process_business_data", # Placeholder for PipelineRunner special handling
+                    model_name="Business",
+                    node_label="Business", # Added for primary node type in this phase
+                    id_property="business_id" # Added
+                ),
+                PhaseConfig(
+                    name="Categories and Business-Category Relationships",
+                    csv_file_name=Path("business_categories_small.csv"),
+                    chunk_size=1000,
+                    validator_func_name="validate_category_data",
+                    normalizer_func_name="normalize_category_data",
+                    loader_method_name="load_nodes", # Changed to generic load_nodes
+                    model_name="Category",
+                    node_label="Category", # Added
+                    id_property="name" # Added
+                ),
+                PhaseConfig(
+                    name="Reviews with Immediate User/Business Relationships",
+                    csv_file_name=Path("review_small.csv"),
+                    chunk_size=300,
+                    validator_func_name="validate_review_data",
+                    normalizer_func_name="normalize_review_data",
+                    loader_method_name="load_nodes", # Changed to generic load_nodes
+                    model_name="Review",
+                    node_label="Review", # Added
+                    id_property="review_id" # Added
+                ),
+                PhaseConfig(
+                    name="Friend Relationships",
+                    csv_file_name=Path("user_friendship.csv"),
+                    chunk_size=500,
+                    validator_func_name="validate_friend_data",
+                    normalizer_func_name="normalize_friend_data",
+                    loader_method_name="load_relationships", # Changed to generic load_relationships
+                    model_name="Friend", # The Friend model is used for validation, but this phase primarily creates relationships
+                    node_label=None, # No primary node type created here
+                    id_property=None # No primary node type created here
+                )
+            ],
+            dead_letter_max_records_per_batch=500
+        ),
+        description="Configuration for the ETL pipeline phases"
+    )
 
 settings = Settings()
 

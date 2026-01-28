@@ -51,3 +51,29 @@ class Category(BaseModel):
         if isinstance(other, Category):
             return self.name == other.name
         return False
+
+
+class RawCategoryInput(BaseModel):
+    """
+    Pydantic model for raw category input from CSV, including business_id.
+    """
+    business_id: str = Field(..., description="The ID of the business")
+    category: str = Field(..., description="The raw category name")
+
+    @field_validator("business_id", mode="after")
+    @classmethod
+    def strip_business_id(cls, v):
+        """Strip whitespace from business_id."""
+        return v.strip()
+
+    @field_validator("category", mode="after")
+    @classmethod
+    def validate_and_clean_category_name(cls, v):
+        """
+        Validates and cleans the category name using the Category model's logic.
+        """
+        try:
+            # Use the Category model to ensure proper cleaning and validation
+            return Category(name=v).name
+        except Exception as e:
+            raise ValueError(f"Category name '{v}' failed validation: {e}")

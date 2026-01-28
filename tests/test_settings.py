@@ -17,6 +17,9 @@ def clean_env():
     for key in keys_to_clear:
         if key in os.environ:
             del os.environ[key]
+    # Ensure NEO4J_PASSWORD is explicitly cleared even if set by external .env
+    if "NEO4J_PASSWORD" in os.environ:
+        del os.environ["NEO4J_PASSWORD"]
     yield
     os.environ.clear()
     os.environ.update(original_env)
@@ -33,7 +36,7 @@ def temp_env_file():
 
 def test_default_settings():
     """Test that default values are loaded when no .env or env vars are present."""
-    s = Settings()
+    s = Settings(_env_file=None)
     assert s.NEO4J_URI == "bolt://localhost:7687"
     assert s.NEO4J_USER == "neo4j"
     assert s.NEO4J_PASSWORD is None
@@ -86,12 +89,7 @@ BATCH_SIZE=2000
     assert s.NEO4J_USER == "envuser"  # From .env, as not overridden by env var
     assert s.BATCH_SIZE == 3000
 
-    # Test that global settings object also reflects precedence
-    # Note: Global settings object might need re-instantiation in real-world for changes to take effect
-    # but for testing, creating a new instance with _env_file is safer.
-    # We can also directly set os.environ and then call global_settings.model_validate(os.environ)
-    # or just rely on the fresh Settings() instance for testing precedence.
-    assert global_settings.NEO4J_URI == "bolt://envvar:7687"
+    # Removed global_settings assertion as it would not reflect changes made within a test after initial import.
 
 
 def test_path_types():

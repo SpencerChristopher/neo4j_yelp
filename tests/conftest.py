@@ -2,6 +2,10 @@ import os
 import pytest
 from unittest.mock import Mock, MagicMock
 
+import sys
+# Add the project root to sys.path to ensure modules can be found
+sys.path.insert(0, os.path.abspath('.'))
+
 # New imports for Neo4j fixtures
 import subprocess
 import time
@@ -20,6 +24,12 @@ setup_logging()
 
 # Register custom markers
 def pytest_configure(config):
+    # Directly set test-specific settings. This happens once at the start of the test session.
+    # No monkeypatch needed as these are global module attributes.
+    from pathlib import Path # Import Path here
+    settings.NEO4J_URI = "bolt://localhost:7687"
+    settings.DATA_DIR = Path(os.path.join(os.path.dirname(__file__), "data")) # Converted to Path object
+
     config.addinivalue_line(
         "markers", "unit: Unit tests (fast, no external dependencies)"
     )
@@ -32,47 +42,68 @@ def pytest_configure(config):
         "markers", "neo4j: Tests that require Neo4j connection"
     )
 
-
 @pytest.fixture(scope="session")
 def test_data_dir():
     """Return the path to test data directory."""
     return os.path.join(os.path.dirname(__file__), "data")
+
+def _is_neo4j_running():
+    """Checks if the neo4j Docker container is running and healthy."""
+    try:
+        # Check if the container exists and is running
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Status}}", "neo4j-neo4j-1"], # Assuming service name 'neo4j' from docker-compose.yml forms container name neo4j-neo4j-1
+            capture_output=True, text=True, check=False
+        )
+        if result.returncode == 0 and result.stdout.strip() == "running":
+            # You might want to add a more thorough health check here,
+            # e.g., using `docker inspect -f "{{.State.Health.Status}}"`
+            return True
+        return False
+    except FileNotFoundError:
+        logging.getLogger(__name__).warning("Docker command not found. Please ensure Docker is installed and in PATH.")
+        return False
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Error checking Docker container status: {e}")
+        return False
 
 
 @pytest.fixture(scope="session")
 def neo4j_container():
     """Ensures Neo4j Docker container is running for the test session."""
     logger = logging.getLogger(__name__)
-    logger.info("Starting Neo4j Docker container...")
 
-    try:
-        # Start Neo4j container
-        subprocess.run(["docker-compose", "up", "-d", "neo4j"], check=True,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if _is_neo4j_running():
+        logger.info("Neo4j Docker container already running. Reusing existing instance.")
+    else:
+        logger.info("Starting Neo4j Docker container...")
+        try:
+            subprocess.run(["docker-compose", "up", "-d", "neo4j"], check=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except Exception as e:
+            logger.error(f"Failed to start Neo4j Docker container: {e}", exc_info=True)
+            raise
 
-        # Wait for Neo4j to be ready
-        max_retries = 30
-        for i in range(max_retries):
-            try:
-                # Neo4jLoader now gets credentials from settings
-                loader = Neo4jLoader()
-                loader.driver.verify_connectivity()
-                loader.close()
-                logger.info("Neo4j container is ready.")
-                break
-            except ServiceUnavailable:
-                logger.info(f"Waiting for Neo4j... (attempt {i+1}/{max_retries})")
-                time.sleep(2)
-        else:
-            raise Exception("Neo4j container did not become ready in time.")
+    # Wait for Neo4j to be ready
+    max_retries = 30
+    for i in range(max_retries):
+        try:
+            loader = Neo4jLoader()
+            loader.driver.verify_connectivity()
+            loader.close()
+            logger.info("Neo4j container is ready.")
+            break
+        except ServiceUnavailable as e:
+            logger.info(f"Waiting for Neo4j... (attempt {i+1}/{max_retries})")
+            logger.debug(f"Neo4j connection error: {e}")
+            time.sleep(5)
+    else:
+        raise Exception("Neo4j container did not become ready in time.")
 
-        yield # Run tests
+    yield # Run tests
 
-    finally:
-        logger.info("Stopping Neo4j Docker container...")
-        subprocess.run(["docker-compose", "down", "-v", "--remove-orphans"], check=True,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        logger.info("Neo4j Docker container stopped and volumes removed.")
+    # The container is not stopped here, it persists for manual management.
+    # User is responsible for docker-compose down when done.
 
 
 @pytest.fixture(scope="function") # Use function scope for clean state per test

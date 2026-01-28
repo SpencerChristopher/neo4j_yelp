@@ -22,6 +22,8 @@ class Neo4jLoader:
             )
             self._verify_connection()
             logger.info("Neo4j driver initialized and connected.")
+            self._create_constraints_and_indexes()
+            logger.info("Neo4j constraints and indexes ensured.")
 
             # Batch sizing from settings for consistency and configurability
             self.current_batch_size = settings.BATCH_SIZE
@@ -62,6 +64,18 @@ class Neo4jLoader:
         logger.info("Attempting to verify Neo4j connectivity...")
         self.driver.verify_connectivity()
         logger.info("Neo4j connectivity verified.")
+
+    def _create_constraints_and_indexes(self):
+        """Creates constraints and indexes defined in settings."""
+        with self.driver.session() as session:
+            for query in settings.NEO4J_CONSTRAINTS_AND_INDEXES:
+                try:
+                    session.run(query)
+                    logger.info(f"Executed constraint/index query: {query}")
+                except Exception as e:
+                    logger.error(f"Failed to execute constraint/index query '{query}': {e}", exc_info=True)
+                    # Depending on severity, you might want to reraise here or just log
+                    raise
 
     def _check_memory_pressure(self):
         """Check if we should back off due to memory pressure."""
@@ -166,6 +180,12 @@ class Neo4jLoader:
         if not data:
             return 0, []
 
+        logger.debug(f"Executing batch for label '{label}' with {len(data)} records. First record type: {type(data[0]) if data else 'N/A'}")
+        if label == "OF": # TEMP DEBUG
+            logger.debug(f"OF Query: {query}") # TEMP DEBUG
+            logger.debug(f"OF Data Sample: {data[:2]}") # TEMP DEBUG
+        logger.debug(f"First 2 data records: {data[:2]}")
+
         try:
             with self.driver.session() as session:
                 summary = session.execute_write(
@@ -176,13 +196,15 @@ class Neo4jLoader:
                 created = (
                         counters.nodes_created
                         + counters.relationships_created
-                )
+                        + counters.properties_set
+                ) # Added properties_set to created count
 
                 logger.debug(
-                    "%s batch executed | nodes_created=%d | rels_created=%d",
+                    "%s batch executed | nodes_created=%d | rels_created=%d | props_set=%d",
                     label,
                     counters.nodes_created,
                     counters.relationships_created,
+                    counters.properties_set,
                 )
 
                 self._adjust_batch_size(True)
@@ -252,157 +274,39 @@ class Neo4jLoader:
             self._write_batch_dead_letters(failed)
         return created, failed
 
-    def load_businesses_complete(self, businesses: List[Dict[str, Any]]) -> Tuple[int, List[Dict]]:
-        """
-        Load businesses WITH their geographic relationships in a single operation.
-        This ensures atomic creation of business with all its connections.
-        """
-        if not businesses:
+    def load_nodes(self, nodes: List[Dict[str, Any]], node_label: str, id_property: str) -> Tuple[int, List[Dict]]:
+        if not nodes:
             return 0, []
 
-        # Split into micro-batches for memory safety
-        micro_batch_size = max(50, min(100, self.current_batch_size // 2))
-        total_created = 0
-        total_failed = []
+        # Sanitize node_label and id_property for direct use in Cypher
+        # In a production system, this should be done more robustly or via parameterization
+        # Here we assume these come from trusted config (settings.py)
+        sanitized_node_label = "".join(filter(str.isalnum, node_label))
+        sanitized_id_property = id_property # Keep original id_property as underscores are valid
 
-        for i in range(0, len(businesses), micro_batch_size):
-            micro_batch = businesses[i:i + micro_batch_size]
+        # Whitelist id_property to prevent injection, or assume it's from trusted config
+        # For this context, we assume id_property comes from settings.py and is safe.
+        # If it were user-controlled, more robust validation would be needed.
+        sanitized_id_property = id_property 
 
-            # Check memory pressure before each micro-batch
-            if self._check_memory_pressure():
-                logger.warning("Memory pressure - pausing before next micro-batch")
-                time.sleep(2)
-                micro_batch_size = max(self.min_batch_size, micro_batch_size // 2)
-
-            query = """
-            UNWIND $data AS b
-            // Create or match Business
-            MERGE (biz:Business {business_id: b.business_id})
-            SET biz.name = b.name,
-                biz.stars = b.stars,
-                biz.review_count = b.review_count,
-                biz.is_open = b.is_open
-
-            // Create or match State (if exists)
-            WITH biz, b
-            WHERE b.state IS NOT NULL
-            MERGE (state:State {code: b.state})
-            MERGE (biz)-[:CLAIMS_STATE]->(state)
-
-            // Create or match City (if exists) - requires both city and state
-            WITH biz, b, state
-            WHERE b.city IS NOT NULL AND b.state IS NOT NULL
-            MERGE (city:City {name: b.city, state_code: b.state})
-            MERGE (biz)-[loc:LOCATED_NEAR]->(city)
-            SET loc.latitude = b.latitude,
-                loc.longitude = b.longitude
-            MERGE (city)-[:CLAIMS_STATE]->(state)  // City->State relationship
-
-            // Create or match PostalCode (if exists)
-            WITH biz, b
-            WHERE b.postal_code IS NOT NULL
-            MERGE (postal:PostalCode {code: b.postal_code})
-            MERGE (biz)-[:CLAIMS_POSTAL_CODE]->(postal)
-            """
-
-            created, failed = self._execute_query_batch(query, micro_batch, "BusinessComplete")
-            total_created += created
-            if failed:
-                total_failed.extend(failed)
-                self._write_batch_dead_letters(failed)
-
-            # Small pause between micro-batches to let Neo4j catch up
-            if i + micro_batch_size < len(businesses):
-                time.sleep(0.1)
-
-        return total_created, total_failed
-
-    def load_categories(self, categories: List[Dict[str, Any]]) -> Tuple[int, List[Dict]]:
-        if not categories:
-            return 0, []
-
-        query = """
-        UNWIND $data AS cat
-        MERGE (:Category {name: cat.name})
+        query = f"""
+        UNWIND $data AS node_data
+        MERGE (n:{sanitized_node_label} {{ {sanitized_id_property}: node_data.{sanitized_id_property} }})
+        SET n += node_data
         """
-        created, failed = self._execute_query_batch(query, categories, "Category")
+
+        created, failed = self._execute_query_batch(query, nodes, node_label)
         if failed:
             self._write_batch_dead_letters(failed)
         return created, failed
 
-    def load_reviews(self, reviews: List[Dict[str, Any]]) -> Tuple[int, List[Dict]]:
-        if not reviews:
-            return 0, []
 
-        # Split into smaller batches for reviews (they're text-heavy)
-        micro_batch_size = max(50, min(100, self.current_batch_size // 2))
-        total_created = 0
-        total_failed = []
-
-        for i in range(0, len(reviews), micro_batch_size):
-            micro_batch = reviews[i:i + micro_batch_size]
-
-            query = """
-            UNWIND $data AS r
-            MERGE (rev:Review {review_id: r.review_id})
-            SET rev.user_id = r.user_id,
-                rev.business_id = r.business_id,
-                rev.stars = r.stars,
-                rev.date = r.date,
-                rev.useful = r.useful,
-                rev.funny = r.funny,
-                rev.cool = r.cool
-            """
-            created, failed = self._execute_query_batch(query, micro_batch, "Review")
-            total_created += created
-            if failed:
-                total_failed.extend(failed)
-
-            # Small pause
-            if i + micro_batch_size < len(reviews):
-                time.sleep(0.05)
-
-        if total_failed:
-            self._write_batch_dead_letters(total_failed)
-        return total_created, total_failed
-
-    def load_users(self, users: List[Dict]) -> Tuple[int, List[Dict]]:
-        if not users:
-            return 0, []
-
-        query = """
-        UNWIND $data AS u
-        MERGE (user:User {user_id: u.user_id})
-        SET user.name = u.name,
-            user.review_count = u.review_count,
-            user.yelping_since = u.yelping_since,
-            user.useful = u.useful,
-            user.funny = u.funny,
-            user.cool = u.cool,
-            user.fans = u.fans,
-            user.average_stars = u.average_stars,
-            user.compliment_hot = u.compliment_hot,
-            user.compliment_more = u.compliment_more,
-            user.compliment_profile = u.compliment_profile,
-            user.compliment_cute = u.compliment_cute,
-            user.compliment_list = u.compliment_list,
-            user.compliment_note = u.compliment_note,
-            user.compliment_plain = u.compliment_plain,
-            user.compliment_cool = u.compliment_cool,
-            user.compliment_funny = u.compliment_funny,
-            user.compliment_writer = u.compliment_writer,
-            user.compliment_photos = u.compliment_photos
-        """
-        created, failed = self._execute_query_batch(query, users, "Users")
-        if failed:
-            self._write_batch_dead_letters(failed)
-        return created, failed
 
     # ----------------------------
     # Relationship loaders (for non-business relationships)
     # ----------------------------
 
-    def create_relationships(self, relationships: List[Dict[str, Any]]) -> Tuple[int, List[Dict]]:
+    def load_relationships(self, relationships: List[Dict[str, Any]]) -> Tuple[int, List[Dict]]:
         if not relationships:
             return 0, []
 
@@ -413,46 +317,87 @@ class Neo4jLoader:
         for rel in relationships:
             grouped.setdefault(rel["relationship_type"], []).append(rel)
 
+        # Define relationship query templates
+        REL_QUERY_TEMPLATES = {
+            "WROTE": """
+                UNWIND $data AS r
+                MATCH (u:User {user_id: r.from_node_id_value})
+                MATCH (rev:Review {review_id: r.to_node_id_value})
+                MERGE (u)-[w:WROTE]->(rev)
+                SET u += r.from_node_properties, rev += r.to_node_properties, w += r.properties
+            """,
+            "OF": """
+                UNWIND $data AS r
+                MATCH (rev:Review {review_id: r.from_node_id_value})
+                MATCH (b:Business {business_id: r.to_node_id_value})
+                MERGE (rev)-[o:OF]->(b)
+                SET rev += r.from_node_properties, b += r.to_node_properties, o += r.properties
+            """,
+            "CLAIMS_CATEGORY": """
+                UNWIND $data AS r
+                MATCH (b:Business {business_id: r.from_node_id_value})
+                MATCH (cat:Category {name: r.to_node_id_value})
+                MERGE (b)-[c:CLAIMS_CATEGORY]->(cat)
+                SET b += r.from_node_properties, cat += r.to_node_properties, c += r.properties
+            """,
+            "FRIENDS_WITH": """
+                UNWIND $data AS r
+                MATCH (u1:User {user_id: r.from_node_id_value})
+                MATCH (u2:User {user_id: r.to_node_id_value})
+                MERGE (u1)-[f:FRIENDS_WITH]->(u2)
+                SET u1 += r.from_node_properties, u2 += r.to_node_properties, f += r.properties
+            """,
+            "CLAIMS_STATE": """ # For City -> State relationship
+                UNWIND $data AS r
+                MATCH (city:City {name: r.from_node_id_value, state_code: r.from_node_id_aux_value})
+                MATCH (state:State {code: r.to_node_id_value})
+                MERGE (city)-[cs:CLAIMS_STATE]->(state)
+                SET city += r.from_node_properties, state += r.to_node_properties, cs += r.properties
+            """,
+            "LOCATED_NEAR": """ # For Business -> City relationship
+                UNWIND $data AS r
+                MATCH (b:Business {business_id: r.from_node_id_value})
+                MATCH (city:City {name: r.to_node_id_value, state_code: r.to_node_id_aux_value})
+                MERGE (b)-[ln:LOCATED_NEAR]->(city)
+                SET b += r.from_node_properties, city += r.to_node_properties, ln += r.properties
+            """,
+            "CLAIMS_POSTAL_CODE": """ # For Business -> PostalCode relationship
+                UNWIND $data AS r
+                MATCH (b:Business {business_id: r.from_node_id_value})
+                MATCH (pc:PostalCode {code: r.to_node_id_value})
+                MERGE (b)-[cp:CLAIMS_POSTAL_CODE]->(pc)
+                SET b += r.from_node_properties, pc += r.to_node_properties, cp += r.properties
+            """,
+            # Add other relationship types as needed
+        }
+
         for rel_type, rels in grouped.items():
+            query_template = REL_QUERY_TEMPLATES.get(rel_type)
+            if not query_template:
+                logger.warning(f"Unknown relationship type encountered and skipped: {rel_type}")
+                total_failed.extend(rels) # Consider all skipped relationships as failed for dead-lettering
+                continue
+
             # Process relationships in smaller chunks
             chunk_size = max(100, min(200, self.current_batch_size // 3))
 
             for i in range(0, len(rels), chunk_size):
                 chunk = rels[i:i + chunk_size]
 
-                if rel_type == "WROTE":
-                    query = """
-                    UNWIND $data AS r
-                    MATCH (u:User {user_id: r.from_node_id_value})
-                    MATCH (rev:Review {review_id: r.to_node_id_value})
-                    MERGE (u)-[:WROTE]->(rev)
-                    """
-                elif rel_type == "OF":
-                    query = """
-                    UNWIND $data AS r
-                    MATCH (rev:Review {review_id: r.from_node_id_value})
-                    MATCH (b:Business {business_id: r.to_node_id_value})
-                    MERGE (rev)-[:OF]->(b)
-                    """
-                elif rel_type == "CLAIMS_CATEGORY":
-                    query = """
-                    UNWIND $data AS r
-                    MATCH (b:Business {business_id: r.from_node_id_value})
-                    MATCH (cat:Category {name: r.to_node_id_value})
-                    MERGE (b)-[:CLAIMS_CATEGORY]->(cat)
-                    """
-                elif rel_type == "FRIENDS_WITH":
-                    query = """
-                    UNWIND $data AS r
-                    MATCH (u1:User {user_id: r.from_node_id_value})
-                    MATCH (u2:User {user_id: r.to_node_id_value})
-                    MERGE (u1)-[:FRIENDS_WITH]->(u2)
-                    """
-                else:
-                    logger.warning(f"Unknown relationship type: {rel_type}")
-                    continue
+                # Extract relationship properties and node properties if they exist in the chunk
+                # This assumes normalizer will add 'from_node_properties', 'to_node_properties', 'properties'
+                # if there are dynamic properties to set on nodes/relationships themselves.
+                # For now, default to empty dicts if not present.
+                processed_chunk = []
+                for item in chunk:
+                    processed_item = item.copy()
+                    processed_item.setdefault('from_node_properties', {})
+                    processed_item.setdefault('to_node_properties', {})
+                    processed_item.setdefault('properties', {})
+                    processed_chunk.append(processed_item)
 
-                created, failed = self._execute_query_batch(query, chunk, rel_type)
+
+                created, failed = self._execute_query_batch(query_template, processed_chunk, rel_type)
                 total_created += created
                 if failed:
                     total_failed.extend(failed)
