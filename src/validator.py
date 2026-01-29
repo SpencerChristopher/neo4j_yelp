@@ -106,8 +106,12 @@ def validate_records(
 # ============================================================
 
 def validate_business_data(
-        raw_records: List[Dict[str, Any]]
+        raw_records: List[Dict[str, Any]],
+        pydantic_model: Type[BaseModel],
+        entity_name: str,
+        identifier_field: str
 ) -> Tuple[List[Business], List[Dict[str, Any]]]:
+    # The incoming arguments (pydantic_model, etc.) are ignored in favor of the hardcoded ones.
     return validate_records(raw_records, Business, "Business", identifier_field="business_id")
 
 
@@ -116,7 +120,10 @@ def validate_business_data(
 # ============================================================
 
 def validate_user_data(
-        raw_records: List[Dict[str, Any]]
+        raw_records: List[Dict[str, Any]],
+        pydantic_model: Type[BaseModel],
+        entity_name: str,
+        identifier_field: str
 ) -> Tuple[List[User], List[Dict[str, Any]]]:
     return validate_records(raw_records, User, "User", identifier_field="user_id")
 
@@ -126,7 +133,10 @@ def validate_user_data(
 # ============================================================
 
 def validate_review_data(
-        raw_records: List[Dict[str, Any]]
+        raw_records: List[Dict[str, Any]],
+        pydantic_model: Type[BaseModel],
+        entity_name: str,
+        identifier_field: str
 ) -> Tuple[List[Review], List[Dict[str, Any]]]:
     # Review has multiple identifiers, so use review_id for logging
     return validate_records(raw_records, Review, "Review", identifier_field="review_id")
@@ -137,7 +147,10 @@ def validate_review_data(
 # ============================================================
 
 def validate_category_data(
-        raw_records: List[Dict[str, Any]]
+        raw_records: List[Dict[str, Any]],
+        pydantic_model: Type[BaseModel],
+        entity_name: str,
+        identifier_field: str
 ) -> Tuple[List[RawCategoryInput], List[Dict[str, Any]]]:
     """
     Validates raw category rows (business_id, category) using RawCategoryInput model.
@@ -151,7 +164,10 @@ def validate_category_data(
 # ============================================================
 
 def validate_friend_data(
-        raw_records: List[Dict[str, Any]]
+        raw_records: List[Dict[str, Any]],
+        pydantic_model: Type[BaseModel],
+        entity_name: str,
+        identifier_field: str
 ) -> Tuple[List[Friend], List[Dict[str, Any]]]:
     # Friend has user1 and user2, use user1 as primary identifier for logging
     return validate_records(raw_records, Friend, "Friend", identifier_field="user1")
@@ -164,15 +180,28 @@ def validate_friend_data(
 from src.models.city import City # Import City model
 
 def validate_city_state_data(
-        raw_records: List[Dict[str, Any]]
+        raw_records: List[Dict[str, Any]],
+        pydantic_model: Type[BaseModel],
+        entity_name: str,
+        identifier_field: str
 ) -> Tuple[List[City], List[Dict[str, Any]]]:
     """
     Validates raw city/state records using the City Pydantic model.
+    This function also pre-processes the records to align CSV headers ('city', 'state')
+    with the Pydantic model's field names ('name', 'state_code').
     """
+    processed_records = []
+    for record in raw_records:
+        processed_record = {
+            'name': record.get('city'),
+            'state_code': record.get('state')
+        }
+        processed_records.append(processed_record)
+
     # Use 'city' as the identifier field for logging dead letters.
     # The 'state' field in the raw record will be mapped to 'state_code' in the City model.
     # The City model's validation will handle state_code constraints.
-    return validate_records(raw_records, City, "City", identifier_field="city")
+    return validate_records(processed_records, pydantic_model, entity_name, identifier_field)
 
 
 # ============================================================

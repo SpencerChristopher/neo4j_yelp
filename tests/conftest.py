@@ -120,7 +120,16 @@ def neo4j_clear_db(neo4j_container):
         # 1. Clear existing data
         logger.info("Clearing Neo4j database...")
         with loader.driver.session() as session:
-            session.run("MATCH (n) DETACH DELETE n").consume()
+            # Use apoc.periodic.iterate for batching, which is safer for large databases
+            # This will delete nodes in batches, preventing memory exhaustion.
+            session.run("""
+                CALL apoc.periodic.iterate(
+                    "MATCH (n) RETURN n",
+                    "DETACH DELETE n",
+                    {batchSize: 1000, parallel: false, iterateList: true}
+                ) YIELD batches, total
+                RETURN batches, total
+            """, timeout=600).consume()
         logger.info("Neo4j database cleared.")
 
         # 2. Re-apply constraints and indexes

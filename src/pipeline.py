@@ -191,6 +191,9 @@ class PipelineRunner:
             logger.error(f"Pydantic model '{phase_config.model_name}' not found for phase {phase_config.name}")
             return
 
+        total_nodes_created_for_phase = 0
+        total_rels_created_for_phase = 0
+
         batch_num = 0
         with pd.read_csv(data_path, chunksize=phase_config.chunk_size) as data_iter:
             for chunk in data_iter:
@@ -211,6 +214,11 @@ class PipelineRunner:
 
                 if not valid_records:
                     logger.warning(f"Batch {batch_num} for {phase_config.name}: No valid records after validation")
+                    # If no valid records, the loader strategy won't be called, so ensure counts are not updated.
+                    # This batch is still processed in terms of rows, but doesn't create nodes/rels.
+                    # This might increment failed_batches if raw_records exist but none are valid.
+                    if len(raw_records) > 0: # If there were raw records but none were valid
+                        self.stats.failed_batches += 1
                     continue
 
                 # Normalize
@@ -218,8 +226,8 @@ class PipelineRunner:
                 normalized_data = normalizer_func(valid_records) 
 
                 # Load
-                created_nodes_count = 0
-                created_rels_count = 0
+                batch_nodes_created = 0
+                batch_rels_created = 0
                 failed_records_in_batch = [] # Track original raw records that failed to load
 
                 _loader_dispatch = {
@@ -232,11 +240,9 @@ class PipelineRunner:
                 loader_strategy = _loader_dispatch.get(phase_config.loader_method_name)
 
                 if loader_strategy:
-                    nodes_created, rels_created, batch_failed_records = loader_strategy(
+                    batch_nodes_created, batch_rels_created, batch_failed_records = loader_strategy(
                         normalized_data, phase_config, raw_records # Pass raw_records for dead-letter fallback
                     )
-                    created_nodes_count += nodes_created
-                    created_rels_count += rels_created
                     failed_records_in_batch.extend(batch_failed_records)
                 else:
                     logger.error(f"Unknown loader method specified: {phase_config.loader_method_name} for phase {phase_config.name}")
@@ -247,24 +253,20 @@ class PipelineRunner:
                     # Note: We are not counting individual failed records from loader here,
                     # but rather marking the whole batch as failed if any loader operation failed.
                     # The loader's dead letter mechanism handles individual records.
-
-                if failed_records_in_batch:
-                    self.stats.failed_batches += 1
-                    # Note: We are not counting individual failed records from loader here,
-                    # but rather marking the whole batch as failed if any loader operation failed.
-                    # The loader's dead letter mechanism handles individual records.
                 else:
                     self.stats.successful_batches += 1
-                    self.stats.total_nodes_created += created_nodes_count
-                    self.stats.total_rels_created += created_rels_count
+                    total_nodes_created_for_phase += batch_nodes_created
+                    total_rels_created_for_phase += batch_rels_created
+                    self.stats.total_nodes_created += batch_nodes_created
+                    self.stats.total_rels_created += batch_rels_created
 
 
                 logger.debug(f"Processed {batch_num * phase_config.chunk_size} records for {phase_config.name} so far")
 
         self.stats.log_phase_end(
             phase_config.name,
-            nodes_created=created_nodes_count,
-            rels_created=created_rels_count
+            nodes_created=total_nodes_created_for_phase,
+            rels_created=total_rels_created_for_phase
         )
 
 

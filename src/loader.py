@@ -347,21 +347,28 @@ class Neo4jLoader:
                 MERGE (u1)-[f:FRIENDS_WITH]->(u2)
                 SET u1 += r.from_node_properties, u2 += r.to_node_properties, f += r.properties
             """,
-            "CLAIMS_STATE": """ # For City -> State relationship
+            "IN": """
                 UNWIND $data AS r
                 MATCH (city:City {name: r.from_node_id_value, state_code: r.from_node_id_aux_value})
-                MATCH (state:State {code: r.to_node_id_value})
-                MERGE (city)-[cs:CLAIMS_STATE]->(state)
-                SET city += r.from_node_properties, state += r.to_node_properties, cs += r.properties
+                MERGE (state:State {code: r.to_node_id_value})
+                MERGE (city)-[isi:IN]->(state)
+                SET city += r.from_node_properties, state += r.to_node_properties, isi += r.properties
             """,
-            "LOCATED_NEAR": """ # For Business -> City relationship
+            "LOCATED_NEAR": """
                 UNWIND $data AS r
                 MATCH (b:Business {business_id: r.from_node_id_value})
                 MATCH (city:City {name: r.to_node_id_value, state_code: r.to_node_id_aux_value})
                 MERGE (b)-[ln:LOCATED_NEAR]->(city)
                 SET b += r.from_node_properties, city += r.to_node_properties, ln += r.properties
             """,
-            "CLAIMS_POSTAL_CODE": """ # For Business -> PostalCode relationship
+            "CLAIMS_STATE": """
+                UNWIND $data AS r
+                MATCH (b:Business {business_id: r.from_node_id_value})
+                MERGE (s:State {code: r.to_node_id_value})
+                MERGE (b)-[cs:CLAIMS_STATE]->(s)
+                SET b += r.from_node_properties, s += r.to_node_properties, cs += r.properties
+            """,
+            "CLAIMS_POSTAL_CODE": """
                 UNWIND $data AS r
                 MATCH (b:Business {business_id: r.from_node_id_value})
                 MATCH (pc:PostalCode {code: r.to_node_id_value})

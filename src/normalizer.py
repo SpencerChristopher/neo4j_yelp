@@ -286,38 +286,27 @@ def normalize_friend_data(
 # ============================================================
 
 def normalize_canonical_city_state_data(
-        raw_records: List[Dict[str, Any]]
+        city_models: List[City] # Expects validated Pydantic City models
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
-    Normalize raw city/state data (e.g., from business_city.csv) into canonical
-    City and State nodes and their CLAIMS_STATE relationships.
+    Normalize validated City models into canonical City nodes and their
+    corresponding CLAIMS_STATE relationships. State nodes are created or merged
+    by the loader during relationship creation.
     """
-    all_nodes: List[Dict[str, Any]] = []
+    city_nodes: List[Dict[str, Any]] = []
     all_relationships: List[Dict[str, Any]] = []
 
-    state_nodes_dict: Dict[str, Dict[str, Any]] = {}  # Key: state_code, Value: State node dict
-    city_nodes_dict: Dict[Tuple[str, str], Dict[str, Any]] = {} # Key: (city_name, state_code), Value: City node dict
+    # Use dicts for deduplication before creating the final lists
+    unique_cities: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
-    for record in raw_records:
-        city_raw = record.get("city")
-        state_raw = record.get("state")
-
-        if not city_raw or not state_raw:
-            logger.warning(f"Skipping canonical city/state record due to missing data: {record}")
-            continue
-
+    for city_model in city_models:
         try:
-            # Use Pydantic models for validation and normalization
-            state_model = State(code=state_raw)
-            city_model = City(name=city_raw, state_code=state_raw)
+            # Deduplicate city nodes
+            city_key = (city_model.name, city_model.state_code)
+            if city_key not in unique_cities:
+                unique_cities[city_key] = city_model.model_dump()
 
-            # Add unique State node
-            state_nodes_dict[state_model.code] = state_model.model_dump()
-
-            # Add unique City node
-            city_nodes_dict[(city_model.name, city_model.state_code)] = city_model.model_dump()
-
-            # Create CLAIMS_STATE relationship from City to State
+            # Create IN relationship from City to State
             all_relationships.append({
                 "from_node_type": "City",
                 "from_node_id_prop": "name",
@@ -326,23 +315,20 @@ def normalize_canonical_city_state_data(
                 "from_node_id_aux_value": city_model.state_code,
                 "to_node_type": "State",
                 "to_node_id_prop": "code",
-                "to_node_id_value": state_model.code,
-                "relationship_type": "CLAIMS_STATE",
+                "to_node_id_value": city_model.state_code, # state_code from City model is the State's code
+                "relationship_type": "IN",
                 "properties": {},
-                "from_node_properties": {}, "to_node_properties": {} # Add empty props for loader
+                "from_node_properties": {}, "to_node_properties": {}
             })
 
-        except ValidationError as e:
-            logger.warning(f"Skipping canonical city/state record due to validation error: {record} - {e}")
         except Exception as e:
-            logger.error(f"Error processing canonical city/state record: {record} - {e}")
+            logger.error(f"Error processing canonical city/state record: {city_model} - {e}")
 
-    all_nodes.extend(state_nodes_dict.values())
-    all_nodes.extend(city_nodes_dict.values())
+    city_nodes = list(unique_cities.values())
 
     logger.info(
-        "Normalized %d unique canonical cities and states | %d relationships",
-        len(all_nodes), len(all_relationships)
+        "Normalized %d unique canonical cities | %d relationships to states",
+        len(city_nodes), len(all_relationships)
     )
 
-    return {"nodes": all_nodes, "relationships": all_relationships}
+    return {"nodes": city_nodes, "relationships": all_relationships}
