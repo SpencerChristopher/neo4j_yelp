@@ -28,6 +28,7 @@ services:
 
     volumes:
       - ./Data:/var/lib/neo4j/import # Removed :ro to allow container write access during startup
+      - ./tests/data:/var/lib/neo4j/import/test_data
       - neo4j-data:/data # Persistent storage for Neo4j data
       - ./neo4j/logs:/logs # Optional: for easier log access
     restart: unless-stopped # Keep Neo4j running unless manually stopped

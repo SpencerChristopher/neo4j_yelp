@@ -460,7 +460,7 @@ class Neo4jLoader:
             "MATCH (u1:User {{user_id: row.user1}}) " +
             "MATCH (u2:User {{user_id: row.user2}}) " +
             "MERGE (u1)-[:FRIENDS_WITH]->(u2)",
-            {{batchSize: 10000, parallel: true, iterateList: true, retries: 5}}
+            {{batchSize: 10000, parallel: false, iterateList: true, retries: 5}}
         ) YIELD batches, total, errorMessages
         RETURN batches, total, errorMessages
         """

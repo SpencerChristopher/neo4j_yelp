@@ -1,4 +1,12 @@
 import os
+import sys
+import os
+
+# Add the project root to the sys.path
+script_dir = os.path.dirname(__file__)
+project_root = os.path.abspath(os.path.join(script_dir, '..'))
+sys.path.insert(0, project_root)
+
 from neo4j import GraphDatabase
 from neo4j.exceptions import AuthError, ServiceUnavailable
 from src.settings import settings

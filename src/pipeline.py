@@ -8,20 +8,21 @@ import gc
 import importlib
 from pathlib import Path
 
-from src.validator import validate_records
-from src.normalizer import (
-    normalize_business_data,
-    normalize_user_data,
-    normalize_category_data,
-    normalize_review_data,
-)
 from src.loader import Neo4jLoader
+from neo4j.exceptions import ClientError
 from src.settings import settings, PhaseConfig
+from src.integrity_checks import verify_data_integrity, validate_review_counts
+from src.dead_letter_handler import write_dead_letters
 
 from src.logging_config import setup_logging
 
 setup_logging()
 logger = logging.getLogger(__name__)
+
+
+class PipelineConfigError(Exception):
+    """Custom exception for pipeline configuration errors."""
+    pass
 
 
 class PipelineStats:
@@ -67,11 +68,20 @@ class PipelineStats:
 
 
 class PipelineRunner:
-    def __init__(self, stats: PipelineStats):
-        self.loader = Neo4jLoader() # Initialize Neo4jLoader internally
+    def __init__(self, loader: Neo4jLoader, stats: PipelineStats):
+        self.loader = loader
         self.stats = stats
         self.dead_letter_max_records_per_batch = settings.pipeline.dead_letter_max_records_per_batch
         self.models = self._load_models()
+
+        self._loader_dispatch = {
+            "load_nodes": self._load_nodes_and_rels_generic,
+            "load_relationships": self._load_relationships_only,
+            "load_nodes_and_relationships": self._load_nodes_and_rels_generic,
+            "process_business_data": self._load_complex_business_data,
+            "load_friends_apoc": self._load_friends_apoc_data,
+            "none": lambda nd, pc, rr: (0, 0, [])
+        }
 
     def _load_models(self) -> Dict[str, Type]:
         """Dynamically load Pydantic models from src.models."""
@@ -83,6 +93,8 @@ class PipelineRunner:
         module = importlib.import_module(module_name)
         return getattr(module, func_name)
 
+
+
     def _load_relationships_only(self, normalized_data: Dict[str, List[Dict[str, Any]]], phase_config: PhaseConfig, raw_records: List[Dict[str, Any]]) -> Tuple[int, int, List[Dict[str, Any]]]:
         """Loads only relationships."""
         created_rels = 0
@@ -91,7 +103,7 @@ class PipelineRunner:
             created_rels, failed_records = self.loader.load_relationships(normalized_data["relationships"])
         return 0, created_rels, failed_records
 
-    def _load_nodes_and_relationships(self, normalized_data: Dict[str, List[Dict[str, Any]]], phase_config: PhaseConfig, raw_records: List[Dict[str, Any]]) -> Tuple[int, int, List[Dict[str, Any]]]:
+    def _load_nodes_and_rels_generic(self, normalized_data: Dict[str, List[Dict[str, Any]]], phase_config: PhaseConfig, raw_records: List[Dict[str, Any]]) -> Tuple[int, int, List[Dict[str, Any]]]:
         """Loads both nodes and relationships."""
         total_nodes_created = 0
         total_rels_created = 0
@@ -104,13 +116,13 @@ class PipelineRunner:
             )
             total_nodes_created += nodes_created
             total_failed_records.extend(failed)
-        
+
         # Then load relationships
         if normalized_data["relationships"]:
             rels_created, failed = self.loader.load_relationships(normalized_data["relationships"])
             total_rels_created += rels_created
             total_failed_records.extend(failed)
-            
+
         return total_nodes_created, total_rels_created, total_failed_records
 
     def _load_complex_business_data(self, normalized_data: Dict[str, List[Dict[str, Any]]], phase_config: PhaseConfig, raw_records: List[Dict[str, Any]]) -> Tuple[int, int, List[Dict[str, Any]]]:
@@ -148,7 +160,7 @@ class PipelineRunner:
             created, failed = self.loader.load_relationships(relationships_to_load)
             total_rels_created += created
             total_failed_records.extend(failed)
-            
+
         return total_nodes_created, total_rels_created, total_failed_records
 
     def _load_friends_apoc_data(self, normalized_data: Dict[str, Any], phase_config: PhaseConfig, raw_records: List[Dict[str, Any]]) -> Tuple[int, int, List[Dict[str, Any]]]:
@@ -237,7 +249,7 @@ class PipelineRunner:
                             raw_records, pydantic_model, phase_config.name, phase_config.id_property
                         )
                         self.stats.validation_failures += len(invalid_records)
-                        _write_dead_letters(invalid_records, self.dead_letter_max_records_per_batch)
+                        write_dead_letters(invalid_records, self.dead_letter_max_records_per_batch)
 
                         if not valid_records:
                             logger.warning(f"Batch {batch_num} for {phase_config.name}: No valid records after validation")
@@ -246,7 +258,7 @@ class PipelineRunner:
                             continue
                         
                         # Normalize
-                        normalizer_func = self._get_callable("src.normalizer", phase_config.normalizer_func_name) # Dynamic normalizer call
+                        # normalizer_func is dynamically loaded above
                         normalized_data = normalizer_func(valid_records) 
                     elif phase_config.loader_method_name == "load_friends_apoc":
                         # For APOC, no client-side validation/normalization needed,
@@ -291,3 +303,88 @@ class PipelineRunner:
                 nodes_created=total_nodes_created_for_phase,
                 rels_created=total_rels_created_for_phase
             )
+
+
+
+    def run_pipeline(self, max_batches: Optional[int] = None):
+        """Orchestrates the entire ETL pipeline based on settings."""
+
+        # Clear dead letter file
+        os.makedirs(os.path.dirname(settings.DEAD_LETTER_FILE), exist_ok=True)
+        with open(settings.DEAD_LETTER_FILE, "w") as f:
+            f.write("")  # Clear file
+
+        try:
+            with self.loader:
+                for phase_config in settings.pipeline.phases:
+                    self.run_phase(phase_config, max_batches)
+
+                logger.warning("Performing final data integrity checks...")
+                verify_data_integrity(self.loader)
+
+                logger.warning("Validating review counts...")
+                validate_review_counts(self.loader, sample_size=1000)
+
+        except Exception as e:
+            logger.critical(f"FATAL: Pipeline failed with error: {e}", exc_info=True)
+            raise
+
+        finally:
+            # Log final statistics
+            summary = self.stats.get_summary()
+            logger.warning(f"""
+            PIPELINE COMPLETION REPORT:
+            ===========================
+            Total Time: {summary['total_time_seconds']:.2f} seconds
+            Throughput: {summary['throughput_rows_per_sec']:.2f} rows/second
+
+            Batches:
+              Successful: {summary['successful_batches']}
+              Failed: {summary['failed_batches']}
+
+            Failures:
+              Validation Errors: {summary['validation_failures']}
+              Batch Processing Errors: {summary['batch_failures']}
+
+            Totals:
+              Rows Processed: {summary['total_rows_processed']}
+              Nodes Created: {summary['total_nodes_created']}
+              Relationships Created: {summary['total_rels_created']}
+
+            Phase Breakdown:
+            """)
+
+            for phase, phase_data in summary['phases'].items():
+                duration = phase_data.get('duration', 0)
+                nodes = phase_data.get('nodes', 0)
+                rels = phase_data.get('rels', 0)
+                logger.warning(f"  {phase}: {duration:.2f}s | Nodes: {nodes} | Rels: {rels}")
+
+            # Write statistics to file
+            stats_log_file = settings.LOG_FILE.parent / "pipeline_stats.json"
+            with open(stats_log_file, "w") as f:
+                json.dump(summary, f, indent=2)
+
+            logger.warning("ETL pipeline finished successfully")
+
+
+
+
+def run_pipeline(max_batches: Optional[int] = None):
+    """Main ETL pipeline orchestrated by PipelineRunner."""
+    logger.warning("Starting Yelp ETL pipeline with optimal loading order (orchestrated by PipelineRunner)")
+
+    stats = PipelineStats()
+    try:
+        loader = Neo4jLoader()
+        runner = PipelineRunner(loader, stats)
+        runner.run_pipeline(max_batches)
+    except Exception as e:
+        logger.critical(f"FATAL: Pipeline failed during initialization or execution: {e}", exc_info=True)
+        raise
+
+
+
+
+if __name__ == "__main__":
+    run_pipeline()

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from typing import List
 
 from src.loader import Neo4jLoader
-from src.pipeline import run_pipeline, PipelineRunner
+from src.pipeline import run_pipeline as pipeline_run, PipelineRunner
 from src.settings import settings, PhaseConfig
 
 import logging
@@ -63,7 +63,7 @@ class TestPhasedLoading:
                 id_property="name"
             )
         ])
-        run_pipeline() 
+        pipeline_run() 
 
         with neo4j_loader.driver.session() as session:
             states_in_db = session.run("MATCH (s:State) RETURN s.code AS code").data()
@@ -118,7 +118,7 @@ class TestPhasedLoading:
                 id_property=None
             )
         ])
-        run_pipeline()
+        pipeline_run()
 
         with neo4j_loader.driver.session() as session:
             expected_users_count = test_data_provider["user_count"]
@@ -170,7 +170,7 @@ class TestPhasedLoading:
                 id_property="name"
             )
         ])
-        run_pipeline()
+        pipeline_run()
 
         with neo4j_loader.driver.session() as session:
             expected_business_count = test_data_provider["business_count"]
@@ -238,7 +238,7 @@ class TestPhasedLoading:
                 id_property="review_id"
             )
         ])
-        run_pipeline()
+        pipeline_run()
 
         with neo4j_loader.driver.session() as session:
             expected_reviews_count = test_data_provider["review_count"]

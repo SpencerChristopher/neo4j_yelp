@@ -20,11 +20,10 @@ def test_load_friends_with_apoc(neo4j_loader, neo4j_container_id, test_data_prov
     logger.info("Starting APOC friendship loading test.")
 
     # Manually load the user nodes first, as this is a prerequisite for creating relationships
-    user_csv_path = settings.DATA_DIR / settings.USER_CSV
-    
-    # We must use the absolute path for the Docker container to see the file
+    # Use the container path for the test CSV file
+    container_user_csv_path = "test_data/test.user_small.csv" # Path relative to /var/lib/neo4j/import
     apoc_user_import_query = f'''
-        LOAD CSV WITH HEADERS FROM 'file:///{user_csv_path.as_posix()}' AS row
+        LOAD CSV WITH HEADERS FROM 'file:///{container_user_csv_path}' AS row
         MERGE (u:User {{user_id: row.user_id}})
         ON CREATE SET u.name = row.name
     '''
@@ -34,9 +33,10 @@ def test_load_friends_with_apoc(neo4j_loader, neo4j_container_id, test_data_prov
         logger.info("Initial user nodes loaded for APOC test.")
 
     # Call the APOC friend loading method
-    friend_csv_filename = settings.FRIEND_CSV
-    neo4j_loader.load_friends_apoc(friend_csv_filename)
-    logger.info(f"APOC friend loading from '{friend_csv_filename}' complete.")
+    # Use the container path for the test friendship CSV file
+    container_friend_csv_path = "test_data/test.user_friendship.csv" # Path relative to /var/lib/neo4j/import
+    neo4j_loader.load_friend_relationships_apoc(container_friend_csv_path)
+    logger.info(f"APOC friend loading from '{container_friend_csv_path}' complete.")
 
     # Verification
     with neo4j_loader.driver.session() as session:
