@@ -9,6 +9,7 @@ from datetime import datetime
 import logging
 import gc
 import socket
+import threading  # Added threading import
 
 from src.settings import settings
 
@@ -454,21 +455,56 @@ class Neo4jLoader:
         # So the path inside Neo4j will be just the filename.
         neo4j_csv_path = f"file:///{csv_file_name}"
 
+        # Dynamically get the chunk_size for the 'Friend Relationships' phase from settings.py
+        friend_phase_config = next(
+            (phase for phase in settings.pipeline.phases if phase.loader_method_name == "load_friends_apoc"),
+            None
+        )
+        apoc_batch_size = friend_phase_config.chunk_size if friend_phase_config else 1000 # Default to 1000 if not found
+
         query = f"""
         CALL apoc.periodic.iterate(
             "LOAD CSV WITH HEADERS FROM '{neo4j_csv_path}' AS row RETURN row",
             "MATCH (u1:User {{user_id: row.user1}}) " +
             "MATCH (u2:User {{user_id: row.user2}}) " +
             "MERGE (u1)-[:FRIENDS_WITH]->(u2)",
-            {{batchSize: 10000, parallel: false, iterateList: true, retries: 5}}
+            {{batchSize: {apoc_batch_size}, parallel: false, iterateList: true, retries: 5}}
         ) YIELD batches, total, errorMessages
         RETURN batches, total, errorMessages
         """
 
         logger.warning(f"Initiating server-side loading for friends from {csv_file_name} using APOC.")
+
+        # Helper function to run the blocking query in a separate thread
+        def _target(query_to_run, session_to_use, result_holder):
+            try:
+                result_holder['result'] = session_to_use.run(query_to_run).single()
+            except Exception as e:
+                result_holder['exception'] = e
+
+        result_holder = {'result': None, 'exception': None}
+        
         try:
             with self.driver.session() as session:
-                result = session.run(query).single()
+                query_thread = threading.Thread(target=_target, args=(query, session, result_holder))
+                query_thread.start()
+
+                # Keep the tool alive with periodic output
+                timeout_seconds = 300 # 5 minutes, same as tool's internal timeout
+                start_time = time.time()
+                while query_thread.is_alive():
+                    if time.time() - start_time > timeout_seconds:
+                        logger.error("APOC query thread timed out after 5 minutes without completion.")
+                        raise TimeoutError("APOC query exceeded maximum wait time.")
+                    logger.warning(f"Still processing friend relationships with APOC... Elapsed: {int(time.time() - start_time)}s")
+                    time.sleep(30) # Print every 30 seconds
+
+                query_thread.join() # Ensure thread finishes (either normally or with exception)
+
+                if result_holder['exception']:
+                    raise result_holder['exception']
+                
+                result = result_holder['result']
                 batches = result["batches"]
                 total = result["total"]
                 errors = result["errorMessages"]

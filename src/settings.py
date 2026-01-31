@@ -92,27 +92,27 @@ class Settings(BaseSettings):
     pipeline: PipelineConfig = Field(
         default_factory=lambda: PipelineConfig(
             phases=[
-                PhaseConfig(
+                PhaseConfig( # New Canonical City/State Phase - Moved up
+                    name="Canonical City/State",
+                    csv_file_name=Path("business_city.csv"),
+                    chunk_size=100, # Assuming business_city.csv is small
+                    validator_func_name="validate_city_state_data",
+                    normalizer_func_name="normalize_canonical_city_state_data",
+                    loader_method_name="load_nodes_and_relationships",
+                    model_name="City",
+                    node_label="City",
+                    id_property="name"
+                ),
+                PhaseConfig( # Users - Moved up
                     name="Users",
                     csv_file_name=Path("user_small.csv"),
                     chunk_size=500,
                     validator_func_name="validate_user_data",
                     normalizer_func_name="normalize_user_data",
-                    loader_method_name="load_nodes", # Changed to generic load_nodes
+                    loader_method_name="load_nodes",
                     model_name="User",
-                    node_label="User", # Added
-                    id_property="user_id" # Added
-                ),
-                PhaseConfig( # New Canonical City/State Phase
-                    name="Canonical City/State",
-                    csv_file_name=Path("business_city.csv"),
-                    chunk_size=100, # Assuming business_city.csv is small
-                    validator_func_name="validate_city_state_data", # Will create this in src/validator.py
-                    normalizer_func_name="normalize_canonical_city_state_data",
-                    loader_method_name="load_nodes_and_relationships", # New general-purpose loader method
-                    model_name="City", # Using City model for validation/normalization base
-                    node_label="City",
-                    id_property="name"
+                    node_label="User",
+                    id_property="user_id"
                 ),
                 PhaseConfig(
                     name="Businesses with Geographic Relationships",
@@ -120,10 +120,10 @@ class Settings(BaseSettings):
                     chunk_size=200,
                     validator_func_name="validate_business_data",
                     normalizer_func_name="normalize_business_data",
-                    loader_method_name="process_business_data", # Placeholder for PipelineRunner special handling
+                    loader_method_name="process_business_data",
                     model_name="Business",
-                    node_label="Business", # Added for primary node type in this phase
-                    id_property="business_id" # Added
+                    node_label="Business",
+                    id_property="business_id"
                 ),
                 PhaseConfig(
                     name="Categories and Business-Category Relationships",
@@ -131,10 +131,10 @@ class Settings(BaseSettings):
                     chunk_size=1000,
                     validator_func_name="validate_category_data",
                     normalizer_func_name="normalize_category_data",
-                    loader_method_name="load_nodes", # Changed to generic load_nodes
+                    loader_method_name="load_nodes",
                     model_name="Category",
-                    node_label="Category", # Added
-                    id_property="name" # Added
+                    node_label="Category",
+                    id_property="name"
                 ),
                 PhaseConfig(
                     name="Reviews with Immediate User/Business Relationships",
@@ -142,18 +142,18 @@ class Settings(BaseSettings):
                     chunk_size=300,
                     validator_func_name="validate_review_data",
                     normalizer_func_name="normalize_review_data",
-                    loader_method_name="load_nodes", # Changed to generic load_nodes
+                    loader_method_name="load_nodes",
                     model_name="Review",
-                    node_label="Review", # Added
-                    id_property="review_id" # Added
+                    node_label="Review",
+                    id_property="review_id"
                 ),
-                PhaseConfig(
+                PhaseConfig( # Friend Relationships - Corrected csv_file_name and kept last
                     name="Friend Relationships",
-                    csv_file_name=Path("test_data/test.user_friendship.csv"),
-                    chunk_size=1, # Set to 1 as it will be ignored, but Pydantic requires int. Or None if type allows.
+                    csv_file_name=Path("user_friendship.csv"),
+                    chunk_size=100, # Adjusted for better APOC performance expectation
                     validator_func_name="none",
                     normalizer_func_name="none",
-                    loader_method_name="load_friends_apoc", # New loader method
+                    loader_method_name="load_friends_apoc",
                     model_name="Friend",
                     node_label=None,
                     id_property=None

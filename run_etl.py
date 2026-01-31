@@ -1,8 +1,10 @@
 # run_etl.py
 import argparse
 import logging
+import sys # Moved to top
 from src.pipeline import run_pipeline
 from src.logging_config import setup_logging
+from scripts.validate_paths import validate_paths # New import
 
 # It's good practice to set up logging at the entry point
 setup_logging()
@@ -22,13 +24,16 @@ def main():
     args = parser.parse_args()
 
     try:
+        # Perform path validation before starting the pipeline
+        if not validate_paths():
+            logger.critical("Data path validation failed. Aborting ETL pipeline.")
+            sys.exit(1)
+
         logger.info("Starting ETL pipeline script...")
         run_pipeline(max_batches=args.max_batches)
         logger.info("ETL pipeline script finished successfully.")
     except Exception as e:
         logger.critical(f"ETL pipeline script failed with a fatal error: {e}", exc_info=True)
-        # In a production script, you might exit with a non-zero status code
-        import sys
         sys.exit(1)
 
 if __name__ == "__main__":
