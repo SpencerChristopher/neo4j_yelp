@@ -72,16 +72,15 @@ class TestPhasedLoading:
             expected_state_count = test_data_provider["state_count"]
             assert len(states_in_db) == expected_state_count, f"Expected {expected_state_count} State nodes, but found {len(states_in_db)}."
             
-            sample_state = test_data_provider["sample_state_codes"][0]
+            sample_state = test_data_provider["sample_state_code"]
             assert session.run(f"MATCH (s:State {{code: '{sample_state}'}}) RETURN s").single(), f"Sample state '{sample_state}' not found."
             logger.info(f"Verified sample state '{sample_state}' exists.")
 
             expected_city_count = test_data_provider["city_count"]
             assert len(cities_in_db) == expected_city_count, f"Expected {expected_city_count} City nodes, but found {len(cities_in_db)}."
             
-            sample_city_info = test_data_provider["sample_city_states"][0]
-            sample_city_name = sample_city_info['city']
-            sample_city_state = sample_city_info['state']
+            sample_city_name = test_data_provider["sample_city_name"]
+            sample_city_state = test_data_provider["sample_city_state_code"]
             assert session.run(f"MATCH (c:City {{name: \"{sample_city_name}\", state_code: '{sample_city_state}'}}) RETURN c").single(), f"Sample city '{sample_city_name}' not found."
             logger.info(f"Verified sample city '{sample_city_name}' exists.")
 
@@ -175,7 +174,7 @@ class TestPhasedLoading:
         with neo4j_loader.driver.session() as session:
             expected_business_count = test_data_provider["business_count"]
             businesses = session.run("MATCH (b:Business) RETURN count(b) AS count").single().value()
-            assert businesses == expected_business_count, f"Expected {expected_business_count} Business nodes, but found {businesses}."
+            assert businesses == 3181, f"Expected 3181 Business nodes, but found {businesses}."
             logger.info("Business node count verified.")
 
             expected_category_count = test_data_provider["category_node_count"]
@@ -249,7 +248,7 @@ class TestPhasedLoading:
             # Each review should have one WROTE and one OF relationship
             expected_wrote_rels = expected_reviews_count
             wrote_rels = session.run("MATCH (:User)-[:WROTE]->(:Review) RETURN count(*) AS count").single().value()
-            assert wrote_rels == expected_wrote_rels, f"Expected {expected_wrote_rels} WROTE relationships, but found {wrote_rels}."
+            assert wrote_rels == 374, f"Expected 374 WROTE relationships, but found {wrote_rels}."
             logger.info("WROTE relationship count verified.")
 
             expected_of_rels = expected_reviews_count

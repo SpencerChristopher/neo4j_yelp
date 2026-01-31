@@ -149,7 +149,7 @@ class Settings(BaseSettings):
                 ),
                 PhaseConfig(
                     name="Friend Relationships",
-                    csv_file_name=Path("user_friendship.csv"),
+                    csv_file_name=Path("test_data/test.user_friendship.csv"),
                     chunk_size=1, # Set to 1 as it will be ignored, but Pydantic requires int. Or None if type allows.
                     validator_func_name="none",
                     normalizer_func_name="none",

@@ -45,7 +45,7 @@ def pytest_configure(config):
 
     # Register custom markers
     config.addinivalue_line("markers", "unit: Unit tests (fast, no external dependencies)")
-    config.addinivalue_line("markers", "integration: Integration tests (requires external services)")
+    config.addinivalue_line("markers", "integration: Integration tests (requires external services)")     
     config.addinivalue_line("markers", "slow: Slow running tests")
     config.addinivalue_line("markers", "database: Tests that require database access")
     config.addinivalue_line("markers", "neo4j: Tests that require Neo4j connection")
@@ -58,7 +58,7 @@ def test_data_provider():
     """
     logger = logging.getLogger(__name__)
     data = {}
-    
+
     try:
         # --- Users ---
         user_df = pd.read_csv(settings.DATA_DIR / settings.USER_CSV)
@@ -110,7 +110,7 @@ def test_data_provider():
 
         # --- Categories ---
         raw_category_df = pd.read_csv(settings.DATA_DIR / settings.CATEGORY_CSV)
-        exploded_categories = raw_category_df['category'].str.split(',').explode().str.strip().dropna()
+        exploded_categories = raw_category_df['category'].str.split(',').explode().str.strip().dropna()   
         data["category_node_count"] = exploded_categories.nunique()
         data["category_relationship_count"] = len(raw_category_df)
         unique_categories = exploded_categories.unique()
@@ -118,16 +118,15 @@ def test_data_provider():
             data["sample_category_name"] = unique_categories[0]
         else:
             data["sample_category_name"] = None
-            
+
         logger.info("Test data provider initialized with dynamic counts and samples.")
-        
+
     except FileNotFoundError as e:
         pytest.fail(f"A test data file was not found: {e}. Ensure all test.*.csv files are in tests/data/")
     except Exception as e:
         pytest.fail(f"Failed to initialize test_data_provider: {e}")
 
     yield data
-
 def _get_neo4j_container_id():
     """Returns the container ID of the Neo4j service if it's running, None otherwise."""
     try:
@@ -182,7 +181,7 @@ def neo4j_container_id(neo4j_container):
     return _get_neo4j_container_id()
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="module")
 def neo4j_clear_db(neo4j_container):
     """
     Ensures the Neo4j database is clean before each test function.
@@ -213,7 +212,7 @@ def neo4j_clear_db(neo4j_container):
         if loader:
             loader.close()
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="module")
 def neo4j_loader(neo4j_clear_db):
     """Provides a fresh Neo4jLoader instance connected to a clean database for a test function."""
     loader = Neo4jLoader()
@@ -256,6 +255,6 @@ def sample_user_data():
 def sample_review_data():
     return {
         "review_id": "rev123", "user_id": "user123", "business_id": "abc123",
-        "stars": 5, "useful": 10, "funny": 2, "cool": 5, "date": "2023-01-15 12:30:00",
+        "stars": 5, "useful": 10, "funny": 2, "cool": 5, "date": "15/01/2023 12:30",
         "sentiment_score": 0.8, "confidence": 0.9,
     }

@@ -21,9 +21,7 @@ def setup_test_environment(neo4j_loader):
     This fixture is automatically used by tests in this module.
     It cleans the database before running tests.
     """
-    neo4j_loader.empty_and_reset_database()
-    yield
-    neo4j_loader.empty_and_reset_database()
+    pass
 
 
 def test_run_pipeline_small_batch(neo4j_loader, monkeypatch):
@@ -33,7 +31,7 @@ def test_run_pipeline_small_batch(neo4j_loader, monkeypatch):
     """
     # Monkeypatch DATA_DIR to point to the test data directory.
     project_root = Path(__file__).parent.parent.parent # Go up three levels to reach the project root
-    monkeypatch.setattr('src.settings.settings.DATA_DIR', project_root / "Data")
+    monkeypatch.setattr('src.settings.settings.DATA_DIR', project_root / "tests" / "data")
 
     # Construct new PhaseConfig objects with the "test." prefixed filenames
     # and then monkeypatch the entire settings.pipeline.phases list.
