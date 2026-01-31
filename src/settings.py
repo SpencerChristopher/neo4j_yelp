@@ -4,31 +4,6 @@ from pydantic import Field, BaseModel
 from typing import Callable, Type, Optional
 
 
-class Settings(BaseSettings):
-    # Pydantic-settings will automatically load environment variables from .env
-    # and respect prefixes (e.g., NEO4J_URI, APP_NAME_NEO4J_URI)
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-    # Neo4j Credentials
-    NEO4J_URI: str = Field("bolt://localhost:7687", description="Neo4j connection URI")
-    NEO4J_USER: str = Field("neo4j", description="Neo4j username")
-    NEO4J_PASSWORD: str | None = Field(None, description="Neo4j password")
-
-    # Data File Paths
-    DATA_DIR: Path = Field(Path("Data"), description="Directory containing source data files")
-    BUSINESS_CSV: Path = Field(Path("business_small.csv"), description="Filename for business data")
-    BUSINESS_CITY_CSV: Path = Field(Path("business_city.csv"), description="Filename for business city data")
-    REVIEW_CSV: Path = Field(Path("review_small.csv"), description="Filename for review data")
-    USER_CSV: Path = Field(Path("user_small.csv"), description="Filename for user data")
-    CATEGORY_CSV: Path = Field(Path("business_categories_small.csv"), description="Filename for category data")
-    FRIEND_CSV: Path = Field(Path("user_friendship.csv"), description="Filename for user friendship data")
-
-    # ETL Configuration
-    BATCH_SIZE: int = Field(1000, description="Batch size for database operations")
-    LOG_FILE: Path = Field(Path("logs/elt_process.log"), description="Path for the ETL process log file")
-    DEAD_LETTER_FILE: Path = Field(Path("logs/dead_letters.jsonl"), description="Path for the dead letter queue file")
-
-
 class PhaseConfig(BaseModel):
     name: str
     csv_file_name: Path # Renamed from csv_file to avoid confusion with DATA_DIR
@@ -50,9 +25,13 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # Neo4j Credentials
-    NEO4J_URI: str = Field("bolt://localhost:7687", description="Neo4j connection URI")
-    NEO4J_USER: str = Field("neo4j", description="Neo4j username")
-    NEO4J_PASSWORD: str | None = Field(None, description="Neo4j password")
+    NEO4J_URI: str = Field("bolt://127.0.0.1:7687", description="Neo4j connection URI")
+    NEO4J_USER: str = Field(..., description="Neo4j username")
+    NEO4J_PASSWORD: str = Field(..., description="Neo4j password")
+    
+    # Neo4j Read-only User Credentials
+    NEO4J_READ_USER: str = Field(..., description="Neo4j read-only username")
+    NEO4J_READ_PASSWORD: str = Field(..., description="Neo4j read-only password")
 
     # Data File Paths
     DATA_DIR: Path = Field(Path("Data"), description="Directory containing source data files")
@@ -171,13 +150,13 @@ class Settings(BaseSettings):
                 PhaseConfig(
                     name="Friend Relationships",
                     csv_file_name=Path("user_friendship.csv"),
-                    chunk_size=500,
-                    validator_func_name="validate_friend_data",
-                    normalizer_func_name="normalize_friend_data",
-                    loader_method_name="load_relationships", # Changed to generic load_relationships
-                    model_name="Friend", # The Friend model is used for validation, but this phase primarily creates relationships
-                    node_label=None, # No primary node type created here
-                    id_property=None # No primary node type created here
+                    chunk_size=1, # Set to 1 as it will be ignored, but Pydantic requires int. Or None if type allows.
+                    validator_func_name="none",
+                    normalizer_func_name="none",
+                    loader_method_name="load_friends_apoc", # New loader method
+                    model_name="Friend",
+                    node_label=None,
+                    id_property=None
                 )
             ],
             dead_letter_max_records_per_batch=500
@@ -186,4 +165,3 @@ class Settings(BaseSettings):
     )
 
 settings = Settings()
-

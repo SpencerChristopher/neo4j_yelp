@@ -1,250 +1,261 @@
 import os
 import pytest
 from unittest.mock import Mock, MagicMock
-
-import sys
-# Add the project root to sys.path to ensure modules can be found
-sys.path.insert(0, os.path.abspath('.'))
-
-# New imports for Neo4j fixtures
+import pandas as pd
 import subprocess
 import time
 import logging
+import json
+from pathlib import Path
 
 from neo4j.exceptions import ServiceUnavailable
 
 from src.loader import Neo4jLoader
 from src.settings import settings
-
 from src.logging_config import setup_logging
 
 # Setup logging first
 setup_logging()
 
+def _clear_logs():
+    """Helper function to delete log files."""
+    log_dir = Path("logs")
+    if log_dir.exists() and log_dir.is_dir():
+        for log_file in ["pipeline.log", "loader_critical.log", "validator_errors.log"]:
+            file_path = log_dir / log_file
+            if file_path.exists():
+                try:
+                    os.remove(file_path)
+                    logging.getLogger(__name__).info(f"Cleared old log file: {file_path}")
+                except OSError as e:
+                    logging.getLogger(__name__).warning(f"Error clearing old log file {file_path}: {e}")
 
-# Register custom markers
 def pytest_configure(config):
-    # Directly set test-specific settings. This happens once at the start of the test session.
-    # No monkeypatch needed as these are global module attributes.
-    from pathlib import Path # Import Path here
-    settings.NEO4J_URI = "bolt://localhost:7687"
-    settings.DATA_DIR = Path(os.path.join(os.path.dirname(__file__), "data")) # Converted to Path object
+    """Configures pytest settings, custom markers, and test data paths."""
+    _clear_logs() # Clear logs at the very beginning of the test session
+    project_root = Path(__file__).parent.parent
+    # Point settings to the smaller test data files
+    settings.DATA_DIR = project_root / "tests" / "data"
+    settings.BUSINESS_CSV = Path("test.business_small.csv")
+    settings.BUSINESS_CITY_CSV = Path("test.business_city.csv")
+    settings.REVIEW_CSV = Path("test.review_small.csv")
+    settings.USER_CSV = Path("test.user_small.csv")
+    settings.CATEGORY_CSV = Path("test.business_categories_small.csv")
+    settings.FRIEND_CSV = Path("test.user_friendship.csv")
 
-    config.addinivalue_line(
-        "markers", "unit: Unit tests (fast, no external dependencies)"
-    )
-    config.addinivalue_line(
-        "markers", "integration: Integration tests (requires external services)"
-    )
+    # Register custom markers
+    config.addinivalue_line("markers", "unit: Unit tests (fast, no external dependencies)")
+    config.addinivalue_line("markers", "integration: Integration tests (requires external services)")
     config.addinivalue_line("markers", "slow: Slow running tests")
     config.addinivalue_line("markers", "database: Tests that require database access")
-    config.addinivalue_line(
-        "markers", "neo4j: Tests that require Neo4j connection"
-    )
+    config.addinivalue_line("markers", "neo4j: Tests that require Neo4j connection")
 
 @pytest.fixture(scope="session")
-def test_data_dir():
-    """Return the path to test data directory."""
-    return os.path.join(os.path.dirname(__file__), "data")
-
-def _is_neo4j_running():
-    """Checks if the neo4j Docker container is running and healthy."""
+def test_data_provider():
+    """
+    Provides dynamically loaded data statistics and sample IDs from the actual
+    dataset specified in settings.DATA_DIR.
+    """
+    logger = logging.getLogger(__name__)
+    data = {}
+    
     try:
-        # Check if the container exists and is running
+        # --- Users ---
+        user_df = pd.read_csv(settings.DATA_DIR / settings.USER_CSV)
+        data["user_count"] = len(user_df)
+        data["sample_user_ids"] = user_df['user_id'].head(10).tolist()
+
+        # --- Friendships ---
+        friend_df = pd.read_csv(settings.DATA_DIR / settings.FRIEND_CSV)
+        data["friendship_count"] = len(friend_df)
+        if not friend_df.empty:
+            sample_friendship = friend_df.iloc[0]
+            data["sample_friendship_user1"] = sample_friendship['user1']
+            data["sample_friendship_user2"] = sample_friendship['user2']
+        else:
+            data["sample_friendship_user1"] = None
+            data["sample_friendship_user2"] = None
+
+        # --- Business ---
+        business_df = pd.read_csv(settings.DATA_DIR / settings.BUSINESS_CSV)
+        data["business_count"] = len(business_df)
+        data["sample_business_ids"] = business_df['business_id'].head(10).tolist()
+        data["sample_business_for_cat_id"] = business_df['business_id'].iloc[0]
+        data["sample_business_for_cat_name"] = business_df['name'].iloc[0]
+
+
+        # --- Reviews ---
+        review_df = pd.read_csv(settings.DATA_DIR / settings.REVIEW_CSV)
+        data["review_count"] = len(review_df)
+        data["sample_review_ids"] = review_df['review_id'].head(10).tolist()
+        # Get user and business IDs associated with the sample review
+        if not review_df.empty:
+            data["sample_review_id"] = review_df['review_id'].iloc[0]
+            data["sample_review_user_id"] = review_df['user_id'].iloc[0]
+            data["sample_review_business_id"] = review_df['business_id'].iloc[0]
+        else:
+            data["sample_review_id"] = None
+            data["sample_review_user_id"] = None
+            data["sample_review_business_id"] = None
+
+
+        # --- City/State ---
+        city_state_df = pd.read_csv(settings.DATA_DIR / settings.BUSINESS_CITY_CSV)
+        data["state_count"] = city_state_df['state'].nunique()
+        data["city_count"] = city_state_df.drop_duplicates(subset=['city', 'state']).shape[0]
+        data["sample_state_code"] = city_state_df['state'].iloc[0]
+        data["sample_city_name"] = city_state_df['city'].iloc[0]
+        data["sample_city_state_code"] = city_state_df['state'].iloc[0]
+
+
+        # --- Categories ---
+        raw_category_df = pd.read_csv(settings.DATA_DIR / settings.CATEGORY_CSV)
+        exploded_categories = raw_category_df['category'].str.split(',').explode().str.strip().dropna()
+        data["category_node_count"] = exploded_categories.nunique()
+        data["category_relationship_count"] = len(raw_category_df)
+        unique_categories = exploded_categories.unique()
+        if unique_categories.size > 0:
+            data["sample_category_name"] = unique_categories[0]
+        else:
+            data["sample_category_name"] = None
+            
+        logger.info("Test data provider initialized with dynamic counts and samples.")
+        
+    except FileNotFoundError as e:
+        pytest.fail(f"A test data file was not found: {e}. Ensure all test.*.csv files are in tests/data/")
+    except Exception as e:
+        pytest.fail(f"Failed to initialize test_data_provider: {e}")
+
+    yield data
+
+def _get_neo4j_container_id():
+    """Returns the container ID of the Neo4j service if it's running, None otherwise."""
+    try:
         result = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Status}}", "neo4j-neo4j-1"], # Assuming service name 'neo4j' from docker-compose.yml forms container name neo4j-neo4j-1
+            ["docker", "compose", "ps", "-q", "neo4j"],
             capture_output=True, text=True, check=False
         )
-        if result.returncode == 0 and result.stdout.strip() == "running":
-            # You might want to add a more thorough health check here,
-            # e.g., using `docker inspect -f "{{.State.Health.Status}}"`
-            return True
-        return False
-    except FileNotFoundError:
-        logging.getLogger(__name__).warning("Docker command not found. Please ensure Docker is installed and in PATH.")
-        return False
-    except Exception as e:
-        logging.getLogger(__name__).error(f"Error checking Docker container status: {e}")
-        return False
-
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        return None
+    except (FileNotFoundError, Exception) as e:
+        logging.getLogger(__name__).warning(f"Could not get Docker container ID: {e}")
+        return None
 
 @pytest.fixture(scope="session")
 def neo4j_container():
-    """Ensures Neo4j Docker container is running for the test session."""
+    """
+    Ensures a Neo4j Docker container is accessible for the test session.
+    
+    IMPORTANT: This fixture *assumes* the Neo4j container is already running
+    (e.g., started manually with `docker compose up -d neo4j`). It will
+    *not* start or stop the container.
+
+    It will wait for the container to become ready and connected.
+    """
     logger = logging.getLogger(__name__)
 
-    if _is_neo4j_running():
-        logger.info("Neo4j Docker container already running. Reusing existing instance.")
-    else:
-        logger.info("Starting Neo4j Docker container...")
-        try:
-            subprocess.run(["docker-compose", "up", "-d", "neo4j"], check=True,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        except Exception as e:
-            logger.error(f"Failed to start Neo4j Docker container: {e}", exc_info=True)
-            raise
-
     # Wait for Neo4j to be ready
-    max_retries = 30
+    max_retries = 60 # Increased retries as container startup can be slow
     for i in range(max_retries):
         try:
             loader = Neo4jLoader()
             loader.driver.verify_connectivity()
             loader.close()
-            logger.info("Neo4j container is ready.")
+            logger.warning("Neo4j container is ready and connected for testing.")
             break
         except ServiceUnavailable as e:
-            logger.info(f"Waiting for Neo4j... (attempt {i+1}/{max_retries})")
-            logger.debug(f"Neo4j connection error: {e}")
+            logger.warning(f"Waiting for Neo4j... (attempt {i+1}/{max_retries}). Ensure container is running. Error: {e}")
             time.sleep(5)
     else:
-        raise Exception("Neo4j container did not become ready in time.")
+        pytest.fail("Neo4j container did not become ready in time. Please ensure it is running (`docker compose up -d neo4j`) and accessible.")
 
-    yield # Run tests
+    yield # Tests run here
 
-    # The container is not stopped here, it persists for manual management.
-    # User is responsible for docker-compose down when done.
+    # No teardown - container lifecycle is managed externally
+    logger.warning("Neo4j container lifecycle is managed externally. No teardown performed by fixture.")
 
 
-@pytest.fixture(scope="function") # Use function scope for clean state per test
+@pytest.fixture(scope="session")
+def neo4j_container_id(neo4j_container):
+    """Provides the ID of the running neo4j container, ensuring it's up first."""
+    return _get_neo4j_container_id()
+
+
+@pytest.fixture(scope="function")
 def neo4j_clear_db(neo4j_container):
     """
-    Provides a clean Neo4j database for each test function by clearing all data
-    and re-applying constraints/indexes.
+    Ensures the Neo4j database is clean before each test function.
     """
     loader = None
     try:
         loader = Neo4jLoader()
         logger = logging.getLogger(__name__)
 
-        # 1. Clear existing data
-        logger.info("Clearing Neo4j database...")
+        logger.info("Fixture neo4j_clear_db: Clearing Neo4j database...")
         with loader.driver.session() as session:
-            # Use apoc.periodic.iterate for batching, which is safer for large databases
-            # This will delete nodes in batches, preventing memory exhaustion.
-            session.run("""
-                CALL apoc.periodic.iterate(
-                    "MATCH (n) RETURN n",
-                    "DETACH DELETE n",
-                    {batchSize: 1000, parallel: false, iterateList: true}
-                ) YIELD batches, total
-                RETURN batches, total
-            """, timeout=600).consume()
-        logger.info("Neo4j database cleared.")
-
-        # 2. Re-apply constraints and indexes
-        logger.info("Re-applying Neo4j constraints and indexes...")
-        # Assuming setup_neo4j.py script sets up constraints
-        # It's better to call the function directly if possible
-        # For now, we'll shell out or re-implement the core logic.
-        # Let's re-implement a minimal version for constraints.
-        constraints_and_indexes = [
-            "CREATE CONSTRAINT business_id_unique IF NOT EXISTS FOR (b:Business) REQUIRE b.business_id IS UNIQUE",
-            "CREATE INDEX business_name_idx IF NOT EXISTS FOR (b:Business) ON (b.name)",
-            "CREATE CONSTRAINT user_id_unique IF NOT EXISTS FOR (u:User) REQUIRE u.user_id IS UNIQUE",
-            "CREATE INDEX user_name_idx IF NOT EXISTS FOR (u:User) ON (u.name)",
-            "CREATE CONSTRAINT review_id_unique IF NOT EXISTS FOR (r:Review) REQUIRE r.review_id IS UNIQUE",
-            "CREATE INDEX review_date_idx IF NOT EXISTS FOR (r:Review) ON (r.date)",
-            "CREATE CONSTRAINT state_code_unique IF NOT EXISTS FOR (s:State) REQUIRE s.code IS UNIQUE",
-            "CREATE CONSTRAINT city_name_state_unique IF NOT EXISTS FOR (c:City) REQUIRE (c.name, c.state_code) IS UNIQUE",
-            "CREATE CONSTRAINT postal_code_unique IF NOT EXISTS FOR (p:PostalCode) REQUIRE p.code IS UNIQUE",
-            "CREATE CONSTRAINT category_name_unique IF NOT EXISTS FOR (c:Category) REQUIRE c.name IS UNIQUE"
-        ]
+            result = session.run("""
+                CALL apoc.periodic.iterate("MATCH (n) RETURN n", "DETACH DELETE n", {batchSize: 1000})
+                YIELD batches, total RETURN batches, total
+            """).single()
+            logger.info(f"Fixture neo4j_clear_db: APOC deletion complete. Batches: {result['batches']}, Total deleted: {result['total']}.")
+        
+        logger.info("Fixture neo4j_clear_db: Re-applying Neo4j constraints and indexes...")
         with loader.driver.session() as session:
-            for query in constraints_and_indexes:
+            for query in settings.NEO4J_CONSTRAINTS_AND_INDEXES:
                 try:
                     session.run(query).consume()
                 except Exception as e:
-                    logger.warning(f"Failed to apply constraint/index '{query}': {e}")
-        logger.info("Neo4j constraints and indexes re-applied.")
-
-        yield loader # Yield the loader for the test to use
+                    logger.warning(f"Could not apply constraint/index (might exist): {e}")
+        logger.info("Fixture neo4j_clear_db: Neo4j constraints and indexes re-applied.")
 
     finally:
         if loader:
             loader.close()
 
-
-@pytest.fixture(scope="function") # This provides the loader for tests to use
+@pytest.fixture(scope="function")
 def neo4j_loader(neo4j_clear_db):
-    """Provides a Neo4jLoader instance connected to a clean database."""
-    return neo4j_clear_db
-
+    """Provides a fresh Neo4jLoader instance connected to a clean database for a test function."""
+    loader = Neo4jLoader()
+    yield loader
+    loader.close()
 
 @pytest.fixture
 def mock_neo4j_driver():
     """Mock Neo4j driver for unit tests."""
-    mock_driver = MagicMock() # Use MagicMock for context manager behavior
+    mock_driver = MagicMock()
     mock_session = MagicMock()
     mock_transaction = Mock()
     mock_result = Mock()
-
-    # Configure the session to act as a context manager
     mock_driver.session.return_value = mock_session
     mock_session.begin_transaction.return_value.__enter__.return_value = mock_transaction
     mock_transaction.run.return_value = mock_result
     mock_result.data.return_value = []
     mock_result.single.return_value = None
-
     return mock_driver
-
 
 @pytest.fixture(scope="class")
 def sample_business_data():
-    """Sample business data for testing, aligned with src/models/business.py."""
     return {
-        "business_id": "abc123",
-        "name": "Test Restaurant",
-        "city": "Test City",
-        "state": "TS",
-        "postal_code": "12345",
-        "latitude": 40.7128,
-        "longitude": -74.0060,
-        "stars": 4.5,
-        "review_count": 100,
-        "is_open": 1,
+        "business_id": "abc123", "name": "Test Restaurant", "city": "Test City", "state": "TS",
+        "postal_code": "12345", "latitude": 40.7128, "longitude": -74.0060,
+        "stars": 4.5, "review_count": 100, "is_open": 1,
     }
-
 
 @pytest.fixture(scope="class")
 def sample_user_data():
-    """Sample user data for testing, aligned with src/models/user.py."""
     return {
-        "user_id": "user123",
-        "name": "John Doe",
-        "review_count": 50,
-        "yelping_since": "01/01/2018 00:00",
-        "useful": 100,
-        "funny": 50,
-        "cool": 75,
-        "fans": 10,
-        "average_stars": 4.2,
-        "compliment_hot": 0,
-        "compliment_more": 0,
-        "compliment_profile": 0,
-        "compliment_cute": 0,
-        "compliment_list": 0,
-        "compliment_note": 0,
-        "compliment_plain": 0,
-        "compliment_cool": 0,
-        "compliment_funny": 0,
-        "compliment_writer": 0,
-        "compliment_photos": 0,
+        "user_id": "user123", "name": "John Doe", "review_count": 50,
+        "yelping_since": "2018-01-01 00:00:00", "useful": 100, "funny": 50, "cool": 75, "fans": 10,
+        "average_stars": 4.2, "compliment_hot": 0, "compliment_more": 0, "compliment_profile": 0,
+        "compliment_cute": 0, "compliment_list": 0, "compliment_note": 0, "compliment_plain": 0,
+        "compliment_cool": 0, "compliment_funny": 0, "compliment_writer": 0, "compliment_photos": 0,
     }
-
 
 @pytest.fixture(scope="class")
 def sample_review_data():
-    """Sample review data for testing, aligned with src/models/review.py."""
     return {
-        "review_id": "rev123",
-        "user_id": "user123",
-        "business_id": "abc123",
-        "stars": 5,
-        "useful": 10,
-        "funny": 2,
-        "cool": 5,
-        "date": "15/01/2023 12:30",
-        "sentiment_score": 0.8,
-        "confidence": 0.9,
+        "review_id": "rev123", "user_id": "user123", "business_id": "abc123",
+        "stars": 5, "useful": 10, "funny": 2, "cool": 5, "date": "2023-01-15 12:30:00",
+        "sentiment_score": 0.8, "confidence": 0.9,
     }

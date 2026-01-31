@@ -93,7 +93,7 @@ def validate_records(
                 exc_info=True
             )
 
-    logger.info(
+    logger.warning(
         "%s validation: %d valid, %d invalid",
         entity_name, len(valid_records), len(invalid_records)
     )
@@ -159,18 +159,7 @@ def validate_category_data(
     return validate_records(raw_records, RawCategoryInput, "RawCategoryInput", identifier_field="business_id")
 
 
-# ============================================================
-# FRIEND VALIDATION
-# ============================================================
 
-def validate_friend_data(
-        raw_records: List[Dict[str, Any]],
-        pydantic_model: Type[BaseModel],
-        entity_name: str,
-        identifier_field: str
-) -> Tuple[List[Friend], List[Dict[str, Any]]]:
-    # Friend has user1 and user2, use user1 as primary identifier for logging
-    return validate_records(raw_records, Friend, "Friend", identifier_field="user1")
 
 
 # ============================================================

@@ -3,6 +3,7 @@ import os
 import tempfile
 from pathlib import Path
 from src.settings import Settings, settings as global_settings
+from pydantic import ValidationError
 
 @pytest.fixture(autouse=True)
 def clean_env():
@@ -34,16 +35,10 @@ def temp_env_file():
     os.unlink(path)
 
 
-def test_default_settings():
-    """Test that default values are loaded when no .env or env vars are present."""
-    s = Settings(_env_file=None)
-    assert s.NEO4J_URI == "bolt://localhost:7687"
-    assert s.NEO4J_USER == "neo4j"
-    assert s.NEO4J_PASSWORD is None
-    assert s.DATA_DIR == Path("Data")
-    assert s.BATCH_SIZE == 1000
-    assert s.LOG_FILE == Path("logs/elt_process.log")
-    assert s.DEAD_LETTER_FILE == Path("logs/dead_letters.jsonl")
+def test_default_settings_raises_validation_error():
+    """Test that instantiating Settings without required env vars raises ValidationError."""
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
 
 
 def test_env_file_loading(temp_env_file):
@@ -76,6 +71,7 @@ def test_environment_variable_precedence(temp_env_file):
     env_content = """
 NEO4J_URI=bolt://envfile:7687
 NEO4J_USER=envuser
+NEO4J_PASSWORD=envpass
 BATCH_SIZE=2000
 """
     temp_env_file.write_text(env_content)

@@ -303,7 +303,7 @@ class TestNeo4jLoaderIntegration:
     def test_create_friendship(self, neo4j_loader, sample_user_data):
         """Test creating a FRIENDS_WITH relationship between users."""
         from src.models import User, Friend
-        from src.normalizer import normalize_user_data, normalize_friend_data
+        from src.normalizer import normalize_user_data
 
         # Load two distinct users
         user1_data = {**sample_user_data, "user_id": "user1", "name": "Alice"}
@@ -312,9 +312,22 @@ class TestNeo4jLoaderIntegration:
         neo4j_loader.load_nodes(normalize_user_data([User(**user1_data)])["nodes"], "User", "user_id")
         neo4j_loader.load_nodes(normalize_user_data([User(**user2_data)])["nodes"], "User", "user_id")
 
-        # Create friendship
+        # Manually construct friendship relationship data
         friend_model = Friend(user1="user1", user2="user2")
-        friend_rels = normalize_friend_data([friend_model])["relationships"]
+        friend_rels = [
+            {
+                "from_node_type": "User",
+                "from_node_id_prop": "user_id",
+                "from_node_id_value": friend_model.user1,
+                "to_node_type": "User",
+                "to_node_id_prop": "user_id",
+                "to_node_id_value": friend_model.user2,
+                "relationship_type": "FRIENDS_WITH",
+                "properties": {},
+                "from_node_properties": {}, # Required by loader
+                "to_node_properties": {}     # Required by loader
+            }
+        ]
 
         created, failed = neo4j_loader.load_relationships(friend_rels)
         assert created == 1

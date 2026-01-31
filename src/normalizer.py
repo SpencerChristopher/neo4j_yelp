@@ -106,7 +106,7 @@ def normalize_business_data(
 
     all_relationships = list(unique_relationships.values())
 
-    logger.info(
+    logger.warning(
         "Normalized %d business nodes, %d postal code nodes, and %d relationships",
         len(business_nodes), len(postal_code_nodes_dict), len(all_relationships)
     )
@@ -134,7 +134,7 @@ def normalize_user_data(
     for u in users:
         user_nodes.append(u.model_dump())
 
-    logger.info("Normalized %d users", len(user_nodes))
+    logger.warning("Normalized %d users", len(user_nodes))
     return {"nodes": user_nodes, "relationships": []}
 
 
@@ -185,7 +185,7 @@ def normalize_review_data(
             "from_node_properties": {}, "to_node_properties": {} # Add empty props for loader
         })
 
-    logger.info(
+    logger.warning(
         "Normalized %d reviews | %d relationships",
         len(review_nodes), len(all_relationships)
     )
@@ -238,7 +238,7 @@ def normalize_category_data(
 
     category_nodes = list(category_nodes_dict.values())
 
-    logger.info(
+    logger.warning(
         "Normalized %d unique categories | %d category claims",
         len(category_nodes), len(category_relationships)
     )
@@ -246,39 +246,7 @@ def normalize_category_data(
     return {"nodes": category_nodes, "relationships": category_relationships}
 
 
-# ============================================================
-# 5. FRIEND NORMALIZATION - UPDATED: Removed since field
-# ============================================================
 
-def normalize_friend_data(
-        friends: List[Friend]
-) -> Dict[str, List[Dict[str, Any]]]:
-    """
-    Normalize Friend models into FRIENDS_WITH relationships.
-    Returns a dictionary with 'nodes' and 'relationships' keys.
-
-    Friend model already ensures:
-    - No self-loops
-    - Sorted user IDs (ensures undirected storage once)
-    """
-
-    friend_relationships: List[Dict[str, Any]] = []
-
-    for f in friends:
-        friend_relationships.append({
-            "from_node_type": "User",
-            "from_node_id_prop": "user_id",
-            "from_node_id_value": f.user1,  # Already sorted by Friend model
-            "to_node_type": "User",
-            "to_node_id_prop": "user_id",
-            "to_node_id_value": f.user2,
-            "relationship_type": "FRIENDS_WITH",
-            "properties": {},
-            "from_node_properties": {}, "to_node_properties": {} # Add empty props for loader
-        })
-
-    logger.info("Normalized %d friend relationships", len(friend_relationships))
-    return {"nodes": [], "relationships": friend_relationships}
 
 
 # ============================================================
@@ -326,7 +294,7 @@ def normalize_canonical_city_state_data(
 
     city_nodes = list(unique_cities.values())
 
-    logger.info(
+    logger.warning(
         "Normalized %d unique canonical cities | %d relationships to states",
         len(city_nodes), len(all_relationships)
     )

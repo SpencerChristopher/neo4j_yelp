@@ -14,7 +14,7 @@ def setup_logging():
 
     # Configure root logger
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
+    root_logger.setLevel(logging.WARNING)
 
     # CRITICAL ERRORS ONLY - loader_critical.log (10MB max, 5 backups)
     critical_handler = logging.handlers.RotatingFileHandler(

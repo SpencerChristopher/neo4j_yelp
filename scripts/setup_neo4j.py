@@ -1,5 +1,5 @@
 import os
-from neo4j import GraphDatabase
+from neo4j import GraphDatabase, Driver, Address
 from neo4j.exceptions import AuthError, ClientError, ServiceUnavailable
 from src.settings import settings
 
@@ -25,6 +25,19 @@ def setup_neo4j_database():
         print("Successfully connected to Neo4j.")
 
         with driver.session() as session:
+            # Create neo4j_read user and grant read access
+            print("Creating user 'neo4j_read' and granting read privileges...")
+            try:
+                session.run(f"CREATE USER {settings.NEO4J_READ_USER} SET PASSWORD '{settings.NEO4J_READ_PASSWORD}'")
+                session.run(f"GRANT READ ON DATABASE neo4j TO {settings.NEO4J_READ_USER}")
+                print(f"User '{settings.NEO4J_READ_USER}' created with read privileges.")
+            except ClientError as e:
+                if "already exists" in str(e):
+                    print(f"User '{settings.NEO4J_READ_USER}' already exists. Skipping creation.")
+                else:
+                    print(f"Error creating/granting privileges to '{settings.NEO4J_READ_USER}': {e}")
+                    raise
+
             # 2. Create Constraints and Indexes
             print("Creating unique constraints and indexes...")
             constraints_and_indexes = [

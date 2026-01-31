@@ -68,13 +68,7 @@ To ensure the Neo4j instance is prepared for the population, the `docker-compose
           - NEO4J_apoc_export_file_enabled=true    # (Optional, for future use)
         # ...
     ```
-*   **Dedicated ELT User:** A dedicated Neo4j user (e.g., `elt_user`) with specific, minimal write privileges will be created and used by the Python script for authentication. This enhances security and provides clear audit trails in Neo4j's logs for ELT operations.
-    *   **Automation:** The ETL script will automatically create this user and grant necessary permissions idempotently upon first run if not already present.
-    ```cypher
-    CREATE USER elt_user IF NOT EXISTS SET PASSWORD $elt_password;
-    GRANT ROLE publisher TO elt_user; // Or more granular privileges as needed
-    ```
-    **Note:** The `$elt_password` parameter will be securely passed by the Python ETL script using an environment variable (e.g., `os.getenv("NEO4J_ELT_PASSWORD")`).
+
 *   **Plugin Verification:** Ensure the `docker-compose.yml` correctly references a Community Edition compatible Neo4j image that includes the necessary APOC and GDS plugins.
 
 #### **1. Source File: `business_small.csv`**
@@ -176,12 +170,14 @@ To ensure the Neo4j instance is prepared for the population, the `docker-compose
 *   **Merge Plan:** **Must run after `user_small.csv` is fully imported.** Due to its massive size (37M rows), it will use APOC's `apoc.periodic.iterate` for efficient, batched processing within Neo4j.
     *   **Orchestration**: The Python ETL script will execute this `apoc.periodic.iterate` call directly via the Neo4j Python driver.
     ```cypher
-    // Using APOC for efficient batching with a dedicated ELT user
     CALL apoc.periodic.iterate(
-      'CALL apoc.load.csv("user_friendship.csv", {header:true}) YIELD map AS row RETURN row.user1 AS user1_id, row.user2 AS user2_id',
-      'MATCH (u1:User {id: user1_id}), (u2:User {id: user2_id}) MERGE (u1)-[:FRIENDS]-(u2)',
-      {batchSize: 10000, parallel: true} // Process in batches of 10,000, potentially in parallel
-    )
+        "LOAD CSV WITH HEADERS FROM 'file:///user_friendship.csv' AS row RETURN row",
+        "MATCH (u1:User {user_id: row.user1}) " +
+        "MATCH (u2:User {user_id: row.user2}) " +
+        "MERGE (u1)-[:FRIENDS_WITH]->(u2)",
+        {batchSize: 10000, parallel: true, iterateList: true, retries: 5}
+    ) YIELD batches, total, errorMessages
+    RETURN batches, total, errorMessages
     ```
 *   **Bad Data Plan:** Data is expected to be clean. APOC's `LOAD CSV` handles basic type conversions; any issues will be logged by Neo4j itself.
 

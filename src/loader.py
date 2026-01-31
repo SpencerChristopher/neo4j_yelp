@@ -1,4 +1,4 @@
-from neo4j import GraphDatabase, Driver
+from neo4j import GraphDatabase, Driver, Address
 from neo4j.exceptions import ServiceUnavailable, TransientError, DatabaseError, ClientError
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from typing import List, Dict, Any, Tuple
@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 import logging
 import gc
+import socket
 
 from src.settings import settings
 
@@ -15,15 +16,30 @@ logger = logging.getLogger(__name__)
 
 
 class Neo4jLoader:
+    def ipv4_resolver(self, address):
+        """
+        A custom resolver function that forces the use of IPv4 addresses.
+        It resolves the hostname to IPv4 addresses and yields them.
+        """
+        try:
+            addr_info = socket.getaddrinfo(address.host, address.port, socket.AF_INET, socket.SOCK_STREAM)
+            for family, socktype, proto, canonname, sockaddr in addr_info:
+                yield Address((sockaddr[0], address.port))
+        except socket.gaierror as e:
+            logger.error(f"Could not resolve address {address.host}:{address.port} to IPv4: {e}")
+            raise
+
     def __init__(self):
         try:
             self.driver: Driver = GraphDatabase.driver(
-                settings.NEO4J_URI, auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+                settings.NEO4J_URI, 
+                auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),
+                resolver=self.ipv4_resolver # Pass the custom resolver here
             )
             self._verify_connection()
-            logger.info("Neo4j driver initialized and connected.")
+            logger.warning("Neo4j driver initialized and connected.")
             self._create_constraints_and_indexes()
-            logger.info("Neo4j constraints and indexes ensured.")
+            logger.warning("Neo4j constraints and indexes ensured.")
 
             # Batch sizing from settings for consistency and configurability
             self.current_batch_size = settings.BATCH_SIZE
@@ -39,7 +55,7 @@ class Neo4jLoader:
             raise
 
     def __enter__(self):
-        logger.info("Entering Neo4jLoader context.")
+        logger.warning("Entering Neo4jLoader context.")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -47,12 +63,12 @@ class Neo4jLoader:
         if exc_type:
             logger.error(f"Exited Neo4jLoader context with an exception: {exc_val}", exc_info=True)
         else:
-            logger.info("Exited Neo4jLoader context gracefully.")
+            logger.warning("Exited Neo4jLoader context gracefully.")
 
     def close(self):
         if self.driver:
             self.driver.close()
-            logger.info("Neo4j driver closed.")
+            logger.warning("Neo4j driver closed.")
 
     @retry(
         wait=wait_exponential(multiplier=1, min=1, max=10),
@@ -61,9 +77,9 @@ class Neo4jLoader:
         reraise=True
     )
     def _verify_connection(self):
-        logger.info("Attempting to verify Neo4j connectivity...")
+        logger.warning("Attempting to verify Neo4j connectivity...")
         self.driver.verify_connectivity()
-        logger.info("Neo4j connectivity verified.")
+        logger.warning("Neo4j connectivity verified.")
 
     def _create_constraints_and_indexes(self):
         """Creates constraints and indexes defined in settings."""
@@ -71,7 +87,7 @@ class Neo4jLoader:
             for query in settings.NEO4J_CONSTRAINTS_AND_INDEXES:
                 try:
                     session.run(query)
-                    logger.info(f"Executed constraint/index query: {query}")
+                    logger.warning(f"Executed constraint/index query: {query}")
                 except Exception as e:
                     logger.error(f"Failed to execute constraint/index query '{query}': {e}", exc_info=True)
                     # Depending on severity, you might want to reraise here or just log
@@ -196,8 +212,7 @@ class Neo4jLoader:
                 created = (
                         counters.nodes_created
                         + counters.relationships_created
-                        + counters.properties_set
-                ) # Added properties_set to created count
+                )
 
                 logger.debug(
                     "%s batch executed | nodes_created=%d | rels_created=%d | props_set=%d",
@@ -417,3 +432,55 @@ class Neo4jLoader:
             self._write_batch_dead_letters(total_failed)
 
         return total_created, total_failed
+
+    def load_friend_relationships_apoc(self, csv_file_name: str) -> Tuple[int, int, str]:
+        """
+        Loads FRIENDS_WITH relationships using Neo4j's LOAD CSV and apoc.periodic.iterate.
+        This method offloads matching and relationship creation to the Neo4j server,
+        optimizing for large relationship files like user_friendship.csv.
+
+        Args:
+            csv_file_name: The name of the CSV file (e.g., "user_friendship.csv")
+                           which must be accessible in Neo4j's import directory.
+                           Assumes the CSV has 'user1' and 'user2' headers.
+
+        Returns:
+            A tuple containing:
+                - total_batches: Number of batches processed by apoc.periodic.iterate.
+                - total_rels: Total number of relationships created.
+                - error_messages: Any error messages reported by apoc.periodic.iterate.
+        """
+        # The CSV file is mounted to /var/lib/neo4j/import in the Docker container
+        # So the path inside Neo4j will be just the filename.
+        neo4j_csv_path = f"file:///{csv_file_name}"
+
+        query = f"""
+        CALL apoc.periodic.iterate(
+            "LOAD CSV WITH HEADERS FROM '{neo4j_csv_path}' AS row RETURN row",
+            "MATCH (u1:User {{user_id: row.user1}}) " +
+            "MATCH (u2:User {{user_id: row.user2}}) " +
+            "MERGE (u1)-[:FRIENDS_WITH]->(u2)",
+            {{batchSize: 10000, parallel: true, iterateList: true, retries: 5}}
+        ) YIELD batches, total, errorMessages
+        RETURN batches, total, errorMessages
+        """
+
+        logger.warning(f"Initiating server-side loading for friends from {csv_file_name} using APOC.")
+        try:
+            with self.driver.session() as session:
+                result = session.run(query).single()
+                batches = result["batches"]
+                total = result["total"]
+                errors = result["errorMessages"]
+
+                if errors:
+                    logger.error(f"APOC periodic iterate reported errors for {csv_file_name}: {errors}")
+                
+                logger.warning(f"Server-side friend loading complete for {csv_file_name}: "
+                            f"Batches: {batches}, Relationships Created: {total}")
+                
+                return batches, total, errors
+
+        except Exception as e:
+            logger.error(f"Failed server-side friend loading for {csv_file_name}: {e}", exc_info=True)
+            raise

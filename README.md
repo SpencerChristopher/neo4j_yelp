@@ -54,10 +54,8 @@ The project uses Docker Compose to manage the Neo4j database.
     NEO4J_URI=bolt://localhost:7687
     NEO4J_USER=neo4j
     NEO4J_PASSWORD=your_neo4j_password
-    NEO4J_ELT_USER=elt_user
-    NEO4J_ELT_PASSWORD=your_elt_user_password
     ```
-    (Ensure `elt_user` is created in Neo4j with appropriate permissions if you use it).
+    (The Neo4j Community Edition only supports a single 'neo4j' user for authentication. Ensure your Neo4j password is set.)
 
 2.  **Start Neo4j Container:**
     ```bash
