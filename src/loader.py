@@ -465,8 +465,8 @@ class Neo4jLoader:
         query = f"""
         CALL apoc.periodic.iterate(
             "LOAD CSV WITH HEADERS FROM '{neo4j_csv_path}' AS row RETURN row",
-            "MATCH (u1:User {{user_id: row.user1}}) " +
-            "MATCH (u2:User {{user_id: row.user2}}) " +
+            "MATCH (u1:User {{id: row.user1}}) USING INDEX u1:User(id) " +
+            "MATCH (u2:User {{id: row.user2}}) USING INDEX u2:User(id) " +
             "MERGE (u1)-[:FRIENDS_WITH]->(u2)",
             {{batchSize: {apoc_batch_size}, parallel: false, iterateList: true, retries: 5}}
         ) YIELD batches, total, errorMessages
