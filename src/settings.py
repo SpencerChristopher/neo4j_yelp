@@ -151,7 +151,7 @@ class Settings(BaseSettings):
                 PhaseConfig( # Friend Relationships - Corrected csv_file_name and kept last
                     name="Friend Relationships",
                     csv_file_name=str(Path("user_friendship.csv")),
-                    chunk_size=100, # APOC batch size for friend relationships
+                    chunk_size=25, # APOC batch size for friend relationships
                     validator_func_name="none",
                     normalizer_func_name="none",
                     loader_method_name="load_friends_apoc",

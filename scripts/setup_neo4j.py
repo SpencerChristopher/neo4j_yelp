@@ -36,15 +36,30 @@ def setup_neo4j_database():
             # Create neo4j_read user and grant read access
             print("Creating user 'neo4j_read' and granting read privileges...")
             try:
-                session.run(f"CREATE USER {settings.NEO4J_READ_USER} SET PASSWORD '{settings.NEO4J_READ_PASSWORD}'")
-                session.run(f"GRANT READ ON DATABASE neo4j TO {settings.NEO4J_READ_USER}")
-                print(f"User '{settings.NEO4J_READ_USER}' created with read privileges.")
+                session.run(
+                    f"CREATE USER {settings.NEO4J_READ_USER} IF NOT EXISTS "
+                    f"SET PASSWORD '{settings.NEO4J_READ_PASSWORD}' CHANGE NOT REQUIRED"
+                )
+                try:
+                    # Ensure password and no-change requirement are enforced even if user already exists
+                    session.run(
+                        f"ALTER USER {settings.NEO4J_READ_USER} "
+                        f"SET PASSWORD '{settings.NEO4J_READ_PASSWORD}' CHANGE NOT REQUIRED"
+                    )
+                except ClientError as e:
+                    if "Old password and new password cannot be the same" not in str(e):
+                        raise
+                try:
+                    session.run(f"GRANT ROLE reader TO {settings.NEO4J_READ_USER}")
+                except ClientError as e:
+                    if "Unsupported administration command" in str(e):
+                        print("Role grants are not supported in this Neo4j edition; skipping role grant.")
+                    else:
+                        raise
+                print(f"User '{settings.NEO4J_READ_USER}' created/updated.")
             except ClientError as e:
-                if "already exists" in str(e):
-                    print(f"User '{settings.NEO4J_READ_USER}' already exists. Skipping creation.")
-                else:
-                    print(f"Error creating/granting privileges to '{settings.NEO4J_READ_USER}': {e}")
-                    raise
+                print(f"Error creating/granting privileges to '{settings.NEO4J_READ_USER}': {e}")
+                raise
 
             # 2. Create Constraints and Indexes
             print("Creating unique constraints and indexes...")

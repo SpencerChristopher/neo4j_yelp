@@ -315,6 +315,8 @@ class Neo4jLoader:
                 UNWIND $data AS r
                 MATCH (city:City {name: r.from_node_id_value, state_code: r.from_node_id_aux_value})
                 MERGE (state:State {code: r.to_node_id_value})
+                OPTIONAL MATCH (city)-[old:IN]->(s) WHERE s <> state
+                DELETE old
                 MERGE (city)-[isi:IN]->(state)
                 SET city += r.from_node_properties, state += r.to_node_properties, isi += r.properties
             """,
@@ -387,7 +389,59 @@ class Neo4jLoader:
 
         return total_created, total_failed
 
-    def load_friend_relationships_apoc(self, csv_file_name: str) -> Tuple[int, int, str]:
+    def _run_apoc_job(
+        self,
+        session,
+        cypher: str,
+        job_name_prefix: str,
+        timeout_seconds: int,
+        poll_interval_seconds: int
+    ) -> Tuple[int, int, List[str]]:
+        job_name = f"{job_name_prefix}_{int(time.time())}"
+        submit_query = "CALL apoc.periodic.submit($name, $cypher) YIELD name RETURN name"
+        submit_result = session.run(submit_query, name=job_name, cypher=cypher).single()
+        if not submit_result or not submit_result.get("name"):
+            raise RuntimeError(f"Failed to submit APOC job '{job_name_prefix}'.")
+
+        start_time = time.time()
+        last_log_time = 0.0
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed > timeout_seconds:
+                session.run("CALL apoc.periodic.cancel($name)", name=job_name)
+                raise TimeoutError(f"APOC job '{job_name}' timed out after {timeout_seconds} seconds.")
+
+            status_rows = session.run("CALL apoc.periodic.list()").data()
+            status = next((row for row in status_rows if row.get("name") == job_name), None)
+
+            if not status:
+                time.sleep(poll_interval_seconds)
+                continue
+
+            done = bool(status.get("done"))
+            cancelled = bool(status.get("cancelled"))
+            update_stats = status.get("updateStatistics") or status.get("updateStats") or {}
+
+            if done or cancelled:
+                batches = update_stats.get("batches") or update_stats.get("batchCount") or 0
+                total = update_stats.get("total") or update_stats.get("rows") or update_stats.get("updates") or 0
+                return int(batches), int(total), []
+
+            if elapsed - last_log_time >= 30:
+                last_log_time = elapsed
+                logger.warning(
+                    f"APOC job '{job_name_prefix}' in progress... Elapsed: {int(elapsed)}s"
+                )
+
+            time.sleep(poll_interval_seconds)
+
+    def load_friend_relationships_apoc(
+        self,
+        csv_file_name: str,
+        async_mode: bool = True,
+        timeout_seconds: int = 300,
+        poll_interval_seconds: int = 5
+    ) -> Tuple[int, int, List[str]]:
         """
         Loads FRIENDS_WITH relationships using Neo4j's LOAD CSV and apoc.periodic.iterate.
         This method offloads matching and relationship creation to the Neo4j server,
@@ -401,27 +455,23 @@ class Neo4jLoader:
         Returns:
             A tuple containing:
                 - total_batches: Number of batches processed by apoc.periodic.iterate.
-                - total_rels: Total number of relationships created.
+                - total_rels: Total number of relationships created (best-effort for async).
                 - error_messages: Any error messages reported by apoc.periodic.iterate.
         """
         neo4j_csv_path = settings.neo4j_file_url(csv_file_name)
 
-        # Dynamically get the chunk_size for the 'Friend Relationships' phase from settings.py
-        friend_phase_config = next(
-            (phase for phase in settings.pipeline.phases if phase.loader_method_name == "load_friends_apoc"),
-            None
-        )
-        apoc_batch_size = friend_phase_config.chunk_size if friend_phase_config else 1000 # Default to 1000 if not found
+        # Revert to direct APOC load and keep batch size small to reduce memory pressure.
+        apoc_batch_size = 10
 
-        query = f"""
+        apoc_query = f"""
         CALL apoc.periodic.iterate(
             "LOAD CSV WITH HEADERS FROM '{neo4j_csv_path}' AS row
              WITH row
              WHERE row.user1 IS NOT NULL AND row.user2 IS NOT NULL AND row.user1 <> row.user2
              RETURN row",
-            "MATCH (u1:User {{user_id: row.user1}}) USING INDEX u1:User(user_id) " +
-            "MATCH (u2:User {{user_id: row.user2}}) USING INDEX u2:User(user_id) " +
-            "MERGE (u1)-[:FRIENDS_WITH]->(u2)",
+            "MATCH (u1:User {{user_id: row.user1}}) USING INDEX u1:User(user_id)
+             MATCH (u2:User {{user_id: row.user2}}) USING INDEX u2:User(user_id)
+             MERGE (u1)-[:FRIENDS_WITH]->(u2)",
             {{batchSize: {apoc_batch_size}, parallel: false, iterateList: true, retries: 5}}
         ) YIELD batches, total, errorMessages
         RETURN batches, total, errorMessages
@@ -431,18 +481,30 @@ class Neo4jLoader:
         
         try:
             with self.driver.session() as session:
-                result = session.run(query).single() # Direct synchronous call
-                
-                batches = result["batches"]
-                total = result["total"]
-                errors = result["errorMessages"]
+                if not async_mode:
+                    result = session.run(apoc_query).single()
+                    if result["errorMessages"]:
+                        logger.error(f"APOC errors for {csv_file_name}: {result['errorMessages']}")
 
-                if errors:
-                    logger.error(f"APOC periodic iterate reported errors for {csv_file_name}: {errors}")
-                
-                logger.warning(f"Server-side friend loading complete for {csv_file_name}: "
-                            f"Batches: {batches}, Relationships Created: {total}")
-                
+                    batches = result["batches"]
+                    total = result["total"]
+                    errors = result["errorMessages"]
+
+                    logger.warning(f"Server-side friend loading complete for {csv_file_name}: "
+                                f"Batches: {batches}, Relationships Created: {total}")
+                    return batches, total, errors
+
+                batches, total, errors = self._run_apoc_job(
+                    session,
+                    apoc_query,
+                    "apoc_friend_load",
+                    timeout_seconds,
+                    poll_interval_seconds
+                )
+                logger.warning(
+                    f"Server-side friend loading complete for {csv_file_name}: "
+                    f"Batches: {batches}, Relationships Created: {total}"
+                )
                 return batches, total, errors
 
         except Exception as e:

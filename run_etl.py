@@ -29,10 +29,18 @@ def main():
         default="Data",
         help="Directory containing full data CSVs (default: Data)."
     )
+    parser.add_argument(
+        "--neo4j-import-subdir",
+        type=str,
+        default=None,
+        help="Subdirectory under Neo4j import root for LOAD CSV (e.g., 'test_data')."
+    )
     args = parser.parse_args()
 
     try:
         settings.DATA_DIR = Path(args.data_dir)
+        if args.neo4j_import_subdir is not None:
+            settings.NEO4J_IMPORT_SUBDIR = args.neo4j_import_subdir
         # Perform path validation before starting the pipeline
         if not validate_paths():
             logger.critical("Data path validation failed. Aborting ETL pipeline.")
