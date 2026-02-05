@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from src.settings import settings
 import pandas as pd
+from tests.utils import csv_path
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ def test_load_friends_with_apoc(neo4j_loader, neo4j_container_id, test_data_prov
 
     # Manually load the user nodes first, as this is a prerequisite for creating relationships
     # Use the container path for the test CSV file
-    container_user_csv_path = "test_data/test.user_small.csv" # Path relative to /var/lib/neo4j/import
+    container_user_csv_path = settings.neo4j_import_relative_path(str(settings.USER_CSV))
     apoc_user_import_query = f'''
         LOAD CSV WITH HEADERS FROM 'file:///{container_user_csv_path}' AS row
         MERGE (u:User {{user_id: row.user_id}})
@@ -43,7 +44,7 @@ def test_load_friends_with_apoc(neo4j_loader, neo4j_container_id, test_data_prov
 
     # Call the APOC friend loading method
     # Use the container path for the test friendship CSV file
-    container_friend_csv_path = "test_data/test.user_friendship.csv" # Path relative to /var/lib/neo4j/import
+    container_friend_csv_path = "test.tiny_user_friendship.csv" # Filename only; loader builds file URL
     batches, total, errors = neo4j_loader.load_friend_relationships_apoc(container_friend_csv_path)
     logger.info(f"APOC friend loading from '{container_friend_csv_path}' complete.")
 
@@ -59,13 +60,21 @@ def test_load_friends_with_apoc(neo4j_loader, neo4j_container_id, test_data_prov
 
         # 2. Verify FRIENDS_WITH relationship count
         # Only friendships where both users exist in the loaded user set should be created.
-        user_df = pd.read_csv(settings.DATA_DIR / settings.USER_CSV)
-        friend_df = pd.read_csv(settings.DATA_DIR / settings.FRIEND_CSV)
-        user_ids = set(user_df["user_id"].tolist())
-        expected_friendship_count = int(
-            friend_df[friend_df["user1"].isin(user_ids) & friend_df["user2"].isin(user_ids)].shape[0]
-        )
-        expected_total_rows = int(friend_df.shape[0])
+        user_ids = set()
+        for chunk in pd.read_csv(csv_path(str(settings.USER_CSV)), chunksize=settings.BATCH_SIZE):
+            user_ids.update(chunk["user_id"].astype(str).tolist())
+
+        expected_friendship_count = 0
+        expected_total_rows = 0
+        sample_user1 = None
+        sample_user2 = None
+        for chunk in pd.read_csv(csv_path(str(settings.FRIEND_CSV)), chunksize=settings.BATCH_SIZE):
+            expected_total_rows += len(chunk)
+            valid = chunk[chunk["user1"].isin(user_ids) & chunk["user2"].isin(user_ids)]
+            expected_friendship_count += len(valid)
+            if sample_user1 is None and not valid.empty:
+                sample_user1 = valid.iloc[0]["user1"]
+                sample_user2 = valid.iloc[0]["user2"]
         rel_count_result = session.run("MATCH ()-[r:FRIENDS_WITH]->() RETURN count(r) as count").single()
         actual_rel_count = rel_count_result['count']
         assert actual_rel_count == expected_friendship_count, \
@@ -78,10 +87,7 @@ def test_load_friends_with_apoc(neo4j_loader, neo4j_container_id, test_data_prov
 
         # 3. Verify a known friendship exists (if sample data is available)
         # Choose a sample friendship that is guaranteed to be within the loaded user set
-        sample_friendship = friend_df[friend_df["user1"].isin(user_ids) & friend_df["user2"].isin(user_ids)].head(1)
-        if not sample_friendship.empty:
-            sample_user1 = sample_friendship.iloc[0]["user1"]
-            sample_user2 = sample_friendship.iloc[0]["user2"]
+        if sample_user1 is not None:
             friendship_result = session.run("""
                 MATCH (u1:User {user_id: $u1})-[f:FRIENDS_WITH]->(u2:User {user_id: $u2})
                 RETURN f

@@ -6,7 +6,7 @@ from typing import Callable, Type, Optional
 
 class PhaseConfig(BaseModel):
     name: str
-    csv_file_name: Path # Renamed from csv_file to avoid confusion with DATA_DIR
+    csv_file_name: str # Changed from Path to str
     chunk_size: int
     validator_func_name: str  # Name of the validation function from src.validator
     normalizer_func_name: str  # Name of the normalization function from src.normalizer
@@ -35,6 +35,7 @@ class Settings(BaseSettings):
 
     # Data File Paths
     DATA_DIR: Path = Field(Path("Data"), description="Directory containing source data files")
+    NEO4J_IMPORT_SUBDIR: str = Field("", description="Subdirectory under Neo4j import root for LOAD CSV (e.g., 'test_data')")
     BUSINESS_CSV: Path = Field(Path("business_small.csv"), description="Filename for business data")
     BUSINESS_CITY_CSV: Path = Field(Path("business_city.csv"), description="Filename for business city data")
     REVIEW_CSV: Path = Field(Path("review_small.csv"), description="Filename for review data")
@@ -94,7 +95,7 @@ class Settings(BaseSettings):
             phases=[
                 PhaseConfig( # New Canonical City/State Phase - Moved up
                     name="Canonical City/State",
-                    csv_file_name=Path("business_city.csv"),
+                    csv_file_name=str(Path("business_city.csv")),
                     chunk_size=100, # Assuming business_city.csv is small
                     validator_func_name="validate_city_state_data",
                     normalizer_func_name="normalize_canonical_city_state_data",
@@ -105,7 +106,7 @@ class Settings(BaseSettings):
                 ),
                 PhaseConfig(
                     name="Businesses with Geographic Relationships",
-                    csv_file_name=Path("business_small.csv"),
+                    csv_file_name=str(Path("business_small.csv")),
                     chunk_size=200,
                     validator_func_name="validate_business_data",
                     normalizer_func_name="normalize_business_data",
@@ -116,7 +117,7 @@ class Settings(BaseSettings):
                 ),
                 PhaseConfig(
                     name="Categories and Business-Category Relationships",
-                    csv_file_name=Path("business_categories_small.csv"),
+                    csv_file_name=str(Path("business_categories_small.csv")),
                     chunk_size=1000,
                     validator_func_name="validate_category_data",
                     normalizer_func_name="normalize_category_data",
@@ -127,7 +128,7 @@ class Settings(BaseSettings):
                 ),
                 PhaseConfig(
                     name="Users",
-                    csv_file_name=Path("user_small.csv"),
+                    csv_file_name=str(Path("user_small.csv")),
                     chunk_size=500,
                     validator_func_name="validate_user_data",
                     normalizer_func_name="normalize_user_data",
@@ -138,7 +139,7 @@ class Settings(BaseSettings):
                 ),
                 PhaseConfig(
                     name="Reviews with Immediate User/Business Relationships",
-                    csv_file_name=Path("review_small.csv"),
+                    csv_file_name=str(Path("review_small.csv")),
                     chunk_size=300,
                     validator_func_name="validate_review_data",
                     normalizer_func_name="normalize_review_data",
@@ -149,7 +150,7 @@ class Settings(BaseSettings):
                 ),
                 PhaseConfig( # Friend Relationships - Corrected csv_file_name and kept last
                     name="Friend Relationships",
-                    csv_file_name=Path("user_friendship.csv"),
+                    csv_file_name=str(Path("user_friendship.csv")),
                     chunk_size=100, # APOC batch size for friend relationships
                     validator_func_name="none",
                     normalizer_func_name="none",
@@ -163,5 +164,20 @@ class Settings(BaseSettings):
         ),
         description="Configuration for the ETL pipeline phases"
     )
+
+    def neo4j_import_relative_path(self, csv_file_name: str) -> str:
+        """
+        Returns the path for Neo4j LOAD CSV relative to the import root.
+        """
+        subdir = self.NEO4J_IMPORT_SUBDIR.strip().strip("/\\")
+        if subdir:
+            return f"{subdir}/{csv_file_name}"
+        return csv_file_name
+
+    def neo4j_file_url(self, csv_file_name: str) -> str:
+        """
+        Returns the file URL for Neo4j LOAD CSV.
+        """
+        return f"file:///{self.neo4j_import_relative_path(csv_file_name)}"
 
 settings = Settings()

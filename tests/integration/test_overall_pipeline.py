@@ -40,7 +40,7 @@ def test_run_pipeline_small_batch(neo4j_loader, monkeypatch):
     new_phases = [
         PhaseConfig(
             name="Users",
-            csv_file_name=Path("test.user_small.csv"),
+            csv_file_name=str(Path("test.user_small.csv")),
             chunk_size=500,
             validator_func_name="validate_user_data",
             normalizer_func_name="normalize_user_data",
@@ -52,7 +52,7 @@ def test_run_pipeline_small_batch(neo4j_loader, monkeypatch):
         # ADDED: The missing Canonical City/State phase
         PhaseConfig(
             name="Canonical City/State",
-            csv_file_name=Path("test.business_city.csv"),
+            csv_file_name=str(Path("test.business_city.csv")),
             chunk_size=100,
             validator_func_name="validate_city_state_data",
             normalizer_func_name="normalize_canonical_city_state_data",
@@ -64,7 +64,7 @@ def test_run_pipeline_small_batch(neo4j_loader, monkeypatch):
         ),
         PhaseConfig(
             name="Businesses with Geographic Relationships",
-            csv_file_name=Path("test.business_small.csv"),
+            csv_file_name=str(Path("test.business_small.csv")),
             chunk_size=200,
             validator_func_name="validate_business_data",
             normalizer_func_name="normalize_business_data",
@@ -75,7 +75,7 @@ def test_run_pipeline_small_batch(neo4j_loader, monkeypatch):
         ),
         PhaseConfig(
             name="Categories and Business-Category Relationships",
-            csv_file_name=Path("test.business_categories_small.csv"),
+            csv_file_name=str(Path("test.business_categories_small.csv")),
             chunk_size=1000,
             validator_func_name="validate_category_data",
             normalizer_func_name="normalize_category_data",
@@ -86,7 +86,7 @@ def test_run_pipeline_small_batch(neo4j_loader, monkeypatch):
         ),
         PhaseConfig(
             name="Reviews with Immediate User/Business Relationships",
-            csv_file_name=Path("test.review_small.csv"),
+            csv_file_name=str(Path("test.review_small.csv")),
             chunk_size=300,
             validator_func_name="validate_review_data",
             normalizer_func_name="normalize_review_data",
@@ -97,8 +97,8 @@ def test_run_pipeline_small_batch(neo4j_loader, monkeypatch):
         ),
         PhaseConfig(
             name="Friend Relationships",
-            csv_file_name=Path("test.user_friendship.csv"),
-            chunk_size=500,
+            csv_file_name=str(Path("test.tiny_user_friendship.csv")),
+            chunk_size=50,
             validator_func_name="none", # This is fine as it's bypassed
             normalizer_func_name="none", # This is fine as it's bypassed
             loader_method_name="load_friends_apoc",

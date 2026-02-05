@@ -9,8 +9,12 @@ def setup_logging():
     # Create logs directory
     os.makedirs("logs", exist_ok=True)
 
-    # Clear handlers
-    logging.root.handlers = []
+    # Close existing handlers to prevent ResourceWarning and remove them
+    for handler in logging.root.handlers[:]: # Iterate over a copy to safely modify list
+        if isinstance(handler, logging.FileHandler):
+            handler.close()
+        logging.root.removeHandler(handler)
+
 
     # Configure root logger
     root_logger = logging.getLogger()

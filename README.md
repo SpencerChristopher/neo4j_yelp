@@ -44,7 +44,7 @@ The ETL pipeline expects specific CSV files to be present in the `Data/` directo
 -   `business_categories_small.csv`
 -   `user_friendship.csv`
 
-**Note:** The `Data/` directory itself is not tracked by Git (it's in `.gitignore`). You will need to obtain these CSV files and place them inside the `Data/` directory. [Yelp_Data](https://business.yelp.com/data/resources/open-dataset/)
+**Note:** The `Data/` directory itself is not tracked by Git (it's in `.gitignore`). You will need to obtain these CSV files and place them inside the `Data/` directory. [Yelp_Data](https://business.yelp.com/data/resources/open-dataset/) source Data used [Link to business small data](https://drive.google.com/file/d/1mg7yf9xLBc_M9k5JDUcO7KncduvGBkev/view?usp=sharing)
 
 ### 4. Set up the Neo4j Environment
 
@@ -57,6 +57,8 @@ The project uses Docker Compose to manage the Neo4j database.
     NEO4J_PASSWORD=your_neo4j_password
     NEO4J_READ_USER=neo4j_read
     NEO4J_READ_PASSWORD=your_read_password
+    # Set for tests if Neo4j import is mounted under /var/lib/neo4j/import/test_data
+    NEO4J_IMPORT_SUBDIR=test_data
     ```
     (The Neo4j Community Edition only supports a single 'neo4j' user for authentication. Ensure your Neo4j password is set.)
 

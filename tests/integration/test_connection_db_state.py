@@ -53,8 +53,13 @@ class TestNeo4jConnectionAndState:
             # --- Check Required User Uniqueness Constraint Exists ---
             try:
                 with neo4j_loader.driver.session() as session:
-                    # Neo4j 5.x returns constraint name and description; use description to verify target
-                    result = session.run("SHOW CONSTRAINTS YIELD name, description WHERE description CONTAINS 'User' AND description CONTAINS 'user_id' RETURN count(name) AS count").single()
+                    # Neo4j 5.x correct syntax: filter on labelsOrTypes and properties
+                    query = """
+                        SHOW CONSTRAINTS YIELD name, labelsOrTypes, properties
+                        WHERE 'User' IN labelsOrTypes AND properties = ['user_id']
+                        RETURN count(name) AS count
+                    """
+                    result = session.run(query).single()
                     user_constraint_count = result["count"] if result else 0
                     assert user_constraint_count >= 1, "Expected a uniqueness constraint on User(user_id)."
                     logger.info("User user_id uniqueness constraint check passed.")

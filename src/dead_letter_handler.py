@@ -60,3 +60,35 @@ def write_dead_letters(records, max_records_per_batch: int = 500):
             except Exception as e:
                 logger.error(f"Failed to serialize record to dead letter: {serializable_record} - {e}", exc_info=True)
                 f.write(json.dumps({"unserializable_record_fallback": str(serializable_record), "error": str(e)}, ensure_ascii=False) + "\n")
+
+from datetime import datetime
+
+def write_batch_failure_dead_letter(
+    failed_records: list[dict[str, Any]],
+    record_type: str,
+    label: str,
+    error_message: str,
+    max_records_to_sample: int = 5,
+    record_sample_char_limit: int = 100
+):
+    """
+    Formats and writes batch failure records to the dead letter queue.
+    This function is designed to be called by the Neo4jLoader.
+    """
+    if not failed_records:
+        return
+
+    dead_letter_entries = []
+    # Only sample a few records to avoid overwhelming the dead letter file
+    for record in failed_records[:max_records_to_sample]:
+        safe_record = {
+            "timestamp": datetime.now().isoformat(),
+            "type": record_type, # e.g., "batch_failure"
+            "label": label,
+            "error": error_message,
+            "record": {k: str(v)[:record_sample_char_limit] for k, v in record.items()}
+        }
+        dead_letter_entries.append(safe_record)
+    
+    write_dead_letters(dead_letter_entries)
+

@@ -62,7 +62,11 @@ class TestNeo4jLoaderApocFriends:
         normalized_actual_query = "".join(actual_query.split()).lower()
 
         assert "callapoc.periodic.iterate" in normalized_actual_query
-        assert f"loadcsvwithheadersfrom'file:///{csv_file_name}'asrowreturnrow" in normalized_actual_query.lower()
+        # Check for the LOAD CSV part and the WHERE clause separately for robustness
+        expected_csv_path = settings.neo4j_file_url(csv_file_name)
+        assert f"loadcsvwithheadersfrom'{expected_csv_path}'asrow" in normalized_actual_query
+        assert "whererow.user1isnotnullandrow.user2isnotnullandrow.user1<>row.user2" in normalized_actual_query
+        assert "returnrow" in normalized_actual_query
         assert "match(u1:user{user_id:row.user1})" in normalized_actual_query
         assert "usingindexu1:user(user_id)" in normalized_actual_query
         assert "match(u2:user{user_id:row.user2})" in normalized_actual_query

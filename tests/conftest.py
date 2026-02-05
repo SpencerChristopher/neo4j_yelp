@@ -13,6 +13,7 @@ from neo4j.exceptions import ServiceUnavailable
 from src.loader import Neo4jLoader
 from src.settings import settings
 from src.logging_config import setup_logging
+from tests.utils import csv_path, csv_chunks
 
 # Setup logging first
 setup_logging()
@@ -36,12 +37,13 @@ def pytest_configure(config):
     project_root = Path(__file__).parent.parent
     # Point settings to the smaller test data files
     settings.DATA_DIR = project_root / "tests" / "data"
+    settings.NEO4J_IMPORT_SUBDIR = "test_data"
     settings.BUSINESS_CSV = Path("test.business_small.csv")
     settings.BUSINESS_CITY_CSV = Path("test.business_city.csv")
     settings.REVIEW_CSV = Path("test.review_small.csv")
     settings.USER_CSV = Path("test.user_small.csv")
     settings.CATEGORY_CSV = Path("test.business_categories_small.csv")
-    settings.FRIEND_CSV = Path("test.user_friendship.csv")
+    settings.FRIEND_CSV = Path("test.tiny_user_friendship.csv")
 
     # Register custom markers
     config.addinivalue_line("markers", "unit: Unit tests (fast, no external dependencies)")
@@ -61,15 +63,17 @@ def test_data_provider():
 
     try:
         # --- Users ---
-        user_df = pd.read_csv(settings.DATA_DIR / settings.USER_CSV)
-        data["user_count"] = len(user_df)
-        data["sample_user_ids"] = user_df['user_id'].head(10).tolist()
+        user_iter = csv_chunks(str(settings.USER_CSV))
+        first_user_chunk = next(user_iter)
+        data["sample_user_ids"] = first_user_chunk['user_id'].head(10).tolist()
+        data["user_count"] = len(first_user_chunk) + sum(len(chunk) for chunk in user_iter)
 
         # --- Friendships ---
-        friend_df = pd.read_csv(settings.DATA_DIR / settings.FRIEND_CSV)
-        data["friendship_count"] = len(friend_df)
-        if not friend_df.empty:
-            sample_friendship = friend_df.iloc[0]
+        friend_iter = csv_chunks(str(settings.FRIEND_CSV))
+        first_friend_chunk = next(friend_iter)
+        data["friendship_count"] = len(first_friend_chunk) + sum(len(chunk) for chunk in friend_iter)
+        if not first_friend_chunk.empty:
+            sample_friendship = first_friend_chunk.iloc[0]
             data["sample_friendship_user1"] = sample_friendship['user1']
             data["sample_friendship_user2"] = sample_friendship['user2']
         else:
@@ -77,22 +81,24 @@ def test_data_provider():
             data["sample_friendship_user2"] = None
 
         # --- Business ---
-        business_df = pd.read_csv(settings.DATA_DIR / settings.BUSINESS_CSV)
-        data["business_count"] = len(business_df)
-        data["sample_business_ids"] = business_df['business_id'].head(10).tolist()
-        data["sample_business_for_cat_id"] = business_df['business_id'].iloc[0]
-        data["sample_business_for_cat_name"] = business_df['name'].iloc[0]
+        business_iter = csv_chunks(str(settings.BUSINESS_CSV))
+        first_business_chunk = next(business_iter)
+        data["business_count"] = len(first_business_chunk) + sum(len(chunk) for chunk in business_iter)
+        data["sample_business_ids"] = first_business_chunk['business_id'].head(10).tolist()
+        data["sample_business_for_cat_id"] = first_business_chunk['business_id'].iloc[0]
+        data["sample_business_for_cat_name"] = first_business_chunk['name'].iloc[0]
 
 
         # --- Reviews ---
-        review_df = pd.read_csv(settings.DATA_DIR / settings.REVIEW_CSV)
-        data["review_count"] = len(review_df)
-        data["sample_review_ids"] = review_df['review_id'].head(10).tolist()
+        review_iter = csv_chunks(str(settings.REVIEW_CSV))
+        first_review_chunk = next(review_iter)
+        data["review_count"] = len(first_review_chunk) + sum(len(chunk) for chunk in review_iter)
+        data["sample_review_ids"] = first_review_chunk['review_id'].head(10).tolist()
         # Get user and business IDs associated with the sample review
-        if not review_df.empty:
-            data["sample_review_id"] = review_df['review_id'].iloc[0]
-            data["sample_review_user_id"] = review_df['user_id'].iloc[0]
-            data["sample_review_business_id"] = review_df['business_id'].iloc[0]
+        if not first_review_chunk.empty:
+            data["sample_review_id"] = first_review_chunk['review_id'].iloc[0]
+            data["sample_review_user_id"] = first_review_chunk['user_id'].iloc[0]
+            data["sample_review_business_id"] = first_review_chunk['business_id'].iloc[0]
         else:
             data["sample_review_id"] = None
             data["sample_review_user_id"] = None
@@ -100,22 +106,34 @@ def test_data_provider():
 
 
         # --- City/State ---
-        city_state_df = pd.read_csv(settings.DATA_DIR / settings.BUSINESS_CITY_CSV)
-        data["state_count"] = city_state_df['state'].nunique()
-        data["city_count"] = city_state_df.drop_duplicates(subset=['city', 'state']).shape[0]
-        data["sample_state_code"] = city_state_df['state'].iloc[0]
-        data["sample_city_name"] = city_state_df['city'].iloc[0]
-        data["sample_city_state_code"] = city_state_df['state'].iloc[0]
+        city_state_iter = csv_chunks(str(settings.BUSINESS_CITY_CSV))
+        first_city_state_chunk = next(city_state_iter)
+        state_codes = set(first_city_state_chunk['state'].tolist())
+        city_state_pairs = set(
+            zip(first_city_state_chunk['city'].tolist(), first_city_state_chunk['state'].tolist())
+        )
+        for chunk in city_state_iter:
+            state_codes.update(chunk['state'].tolist())
+            city_state_pairs.update(zip(chunk['city'].tolist(), chunk['state'].tolist()))
+        data["state_count"] = len(state_codes)
+        data["city_count"] = len(city_state_pairs)
+        data["sample_state_code"] = first_city_state_chunk['state'].iloc[0]
+        data["sample_city_name"] = first_city_state_chunk['city'].iloc[0]
+        data["sample_city_state_code"] = first_city_state_chunk['state'].iloc[0]
 
 
         # --- Categories ---
-        raw_category_df = pd.read_csv(settings.DATA_DIR / settings.CATEGORY_CSV)
-        exploded_categories = raw_category_df['category'].str.split(',').explode().str.strip().dropna()   
-        data["category_node_count"] = exploded_categories.nunique()
-        data["category_relationship_count"] = len(raw_category_df)
-        unique_categories = exploded_categories.unique()
-        if unique_categories.size > 0:
-            data["sample_category_name"] = unique_categories[0]
+        category_iter = csv_chunks(str(settings.CATEGORY_CSV))
+        unique_categories = set()
+        total_category_rels = 0
+        for chunk in category_iter:
+            exploded = chunk['category'].str.split(',').explode().str.strip().dropna()
+            unique_categories.update(exploded.tolist())
+            total_category_rels += len(exploded)
+        data["category_node_count"] = len(unique_categories)
+        data["category_relationship_count"] = total_category_rels # Corrected to count exploded categories
+        if unique_categories:
+            data["sample_category_name"] = next(iter(unique_categories))
         else:
             data["sample_category_name"] = None
 

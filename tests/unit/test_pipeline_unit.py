@@ -60,7 +60,7 @@ def test_pipeline_error_handling():
         settings.pipeline.phases = [
                 PhaseConfig(
                     name="Mocked Phase",
-                    csv_file_name=Path("mock.csv"),
+                    csv_file_name=str(Path("mock.csv")),
                     chunk_size=1,
                     validator_func_name="validate_user_data", # Any valid validator name
                     normalizer_func_name="normalize_user_data", # Any valid normalizer name

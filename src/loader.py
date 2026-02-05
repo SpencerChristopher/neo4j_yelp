@@ -12,6 +12,7 @@ import socket
 import threading  # Added threading import
 
 from src.settings import settings
+from src.dead_letter_handler import write_batch_failure_dead_letter
 
 logger = logging.getLogger(__name__)
 
@@ -153,28 +154,24 @@ class Neo4jLoader:
                 logger.warning(f"Multiple consecutive failures, pausing for 5 seconds")
                 time.sleep(5)
 
-    def _write_batch_dead_letters(self, failed_records: List[Dict[str, Any]]) -> None:
-        """Write batch failures to dead letter queue with memory safety."""
-        if not failed_records:
-            return
+    def _sanitize_cypher_identifier(self, identifier: str, context: str) -> str:
+        """
+        Sanitizes a string to be a valid Cypher identifier (label, relationship type, property name).
+        Allowed characters are alphanumeric and underscores. Cannot start with a digit.
+        """
+        if not identifier:
+            raise ValueError(f"Cypher identifier cannot be empty. Context: {context}")
 
-        os.makedirs(os.path.dirname(settings.DEAD_LETTER_FILE), exist_ok=True)
+        # Check for valid characters: alphanumeric and underscore
+        if not all(c.isalnum() or c == '_' for c in identifier):
+            raise ValueError(f"Invalid characters in Cypher identifier '{identifier}'. Only alphanumeric and "
+                             f"underscores are allowed. Context: {context}")
 
-        try:
-            with open(settings.DEAD_LETTER_FILE, "a", encoding="utf-8") as f:
-                # LIMIT to 50 records per batch to prevent memory issues
-                for record in failed_records[:50]:
-                    safe_record = {
-                        "timestamp": datetime.now().isoformat(),
-                        "type": record.get("type", "unknown"),
-                        "label": record.get("label", "unknown"),
-                        "error": str(record.get("error", ""))[:200],
-                        "record_sample": {k: str(v)[:100] for k, v in record.get("record", {}).items()}
-                    }
-                    f.write(json.dumps(safe_record) + "\n")
-        except Exception as e:
-            # Don't let dead letter writing break the pipeline
-            logger.error(f"Failed to write batch dead letters: {e}")
+        # Cannot start with a digit
+        if identifier[0].isdigit():
+            raise ValueError(f"Cypher identifier '{identifier}' cannot start with a digit. Context: {context}")
+
+        return identifier
 
     @retry(
         wait=wait_exponential(multiplier=2, min=2, max=60),
@@ -234,76 +231,22 @@ class Neo4jLoader:
 
             self._adjust_batch_size(False)
 
-            # Return failed records for dead letter queue
-            failed_records = []
-            for record in data[:5]:  # Only sample first 5 records
-                failed_records.append({
-                    "type": "batch_failure",
-                    "label": label,
-                    "error": str(e)[:200],
-                    "record": {k: str(v)[:100] for k, v in record.items()}
-                })
-
             self.total_failed_records += len(data)
-            return 0, failed_records
+            return 0, data # Return all records as failed, not just a sample
 
     # ----------------------------
     # Node loaders (updated for immediate relationship creation)
     # ----------------------------
 
-    def load_states(self, states: List[Dict]) -> Tuple[int, List[Dict]]:
-        if not states:
-            return 0, []
 
-        query = """
-        UNWIND $data AS state
-        MERGE (:State {code: state.code})
-        """
-        created, failed = self._execute_query_batch(query, states, "State")
-        if failed:
-            self._write_batch_dead_letters(failed)
-        return created, failed
-
-    def load_cities(self, cities: List[Dict]) -> Tuple[int, List[Dict]]:
-        if not cities:
-            return 0, []
-
-        query = """
-        UNWIND $data AS city
-        MERGE (:City {name: city.name, state_code: city.state_code})
-        """
-        created, failed = self._execute_query_batch(query, cities, "City")
-        if failed:
-            self._write_batch_dead_letters(failed)
-        return created, failed
-
-    def load_postal_codes(self, postal_codes: List[Dict]) -> Tuple[int, List[Dict]]:
-        if not postal_codes:
-            return 0, []
-
-        query = """
-        UNWIND $data AS pc
-        MERGE (:PostalCode {code: pc.code})
-        """
-        created, failed = self._execute_query_batch(query, postal_codes, "PostalCode")
-        if failed:
-            self._write_batch_dead_letters(failed)
-        return created, failed
 
     def load_nodes(self, nodes: List[Dict[str, Any]], node_label: str, id_property: str) -> Tuple[int, List[Dict]]:
         if not nodes:
             return 0, []
 
-        # Sanitize node_label and id_property for direct use in Cypher
-        # In a production system, this should be done more robustly or via parameterization
-        # Here we assume these come from trusted config (settings.py)
-        sanitized_node_label = "".join(filter(str.isalnum, node_label))
-        sanitized_id_property = id_property # Keep original id_property as underscores are valid
-
-        # Whitelist id_property to prevent injection, or assume it's from trusted config
-        # For this context, we assume id_property comes from settings.py and is safe.
-        # If it were user-controlled, more robust validation would be needed.
-        sanitized_id_property = id_property 
+        # Sanitize node_label and id_property using the dedicated helper
+        sanitized_node_label = self._sanitize_cypher_identifier(node_label, "node_label in load_nodes")
+        sanitized_id_property = self._sanitize_cypher_identifier(id_property, "id_property in load_nodes")
 
         query = f"""
         UNWIND $data AS node_data
@@ -313,7 +256,12 @@ class Neo4jLoader:
 
         created, failed = self._execute_query_batch(query, nodes, node_label)
         if failed:
-            self._write_batch_dead_letters(failed)
+            write_batch_failure_dead_letter(
+                failed_records=failed,
+                record_type="node_load_failure",
+                label=node_label,
+                error_message="Failed to load node(s)"
+            )
         return created, failed
 
 
@@ -430,7 +378,12 @@ class Neo4jLoader:
                     time.sleep(0.05)
 
         if total_failed:
-            self._write_batch_dead_letters(total_failed)
+            write_batch_failure_dead_letter(
+                failed_records=total_failed,
+                record_type="relationship_load_failure",
+                label="Multiple_Relationship_Types", # Can refine this if needed
+                error_message="Failed to load one or more relationships"
+            )
 
         return total_created, total_failed
 
@@ -451,17 +404,7 @@ class Neo4jLoader:
                 - total_rels: Total number of relationships created.
                 - error_messages: Any error messages reported by apoc.periodic.iterate.
         """
-        # The CSV file is mounted to /var/lib/neo4j/import in the Docker container.
-        # If using tests/data (mounted at /var/lib/neo4j/import/test_data),
-        # include the subdirectory in the Neo4j file URL.
-        data_dir_str = str(settings.DATA_DIR).replace("\\", "/")
-        if data_dir_str.endswith("tests/data") or data_dir_str.endswith("tests/data/"):
-            if str(csv_file_name).replace("\\", "/").startswith("test_data/"):
-                neo4j_csv_path = f"file:///{csv_file_name}"
-            else:
-                neo4j_csv_path = f"file:///test_data/{csv_file_name}"
-        else:
-            neo4j_csv_path = f"file:///{csv_file_name}"
+        neo4j_csv_path = settings.neo4j_file_url(csv_file_name)
 
         # Dynamically get the chunk_size for the 'Friend Relationships' phase from settings.py
         friend_phase_config = next(
@@ -479,43 +422,17 @@ class Neo4jLoader:
             "MATCH (u1:User {{user_id: row.user1}}) USING INDEX u1:User(user_id) " +
             "MATCH (u2:User {{user_id: row.user2}}) USING INDEX u2:User(user_id) " +
             "MERGE (u1)-[:FRIENDS_WITH]->(u2)",
-            {{batchSize: {apoc_batch_size}, parallel: true, iterateList: true, retries: 5}}
+            {{batchSize: {apoc_batch_size}, parallel: false, iterateList: true, retries: 5}}
         ) YIELD batches, total, errorMessages
         RETURN batches, total, errorMessages
         """
 
         logger.warning(f"Initiating server-side loading for friends from {csv_file_name} using APOC.")
-
-        # Helper function to run the blocking query in a separate thread
-        def _target(query_to_run, session_to_use, result_holder):
-            try:
-                result_holder['result'] = session_to_use.run(query_to_run).single()
-            except Exception as e:
-                result_holder['exception'] = e
-
-        result_holder = {'result': None, 'exception': None}
         
         try:
             with self.driver.session() as session:
-                query_thread = threading.Thread(target=_target, args=(query, session, result_holder))
-                query_thread.start()
-
-                # Keep the tool alive with periodic output
-                timeout_seconds = 300 # 5 minutes, same as tool's internal timeout
-                start_time = time.time()
-                while query_thread.is_alive():
-                    if time.time() - start_time > timeout_seconds:
-                        logger.error("APOC query thread timed out after 5 minutes without completion.")
-                        raise TimeoutError("APOC query exceeded maximum wait time.")
-                    logger.warning(f"Still processing friend relationships with APOC... Elapsed: {int(time.time() - start_time)}s")
-                    time.sleep(30) # Print every 30 seconds
-
-                query_thread.join() # Ensure thread finishes (either normally or with exception)
-
-                if result_holder['exception']:
-                    raise result_holder['exception']
+                result = session.run(query).single() # Direct synchronous call
                 
-                result = result_holder['result']
                 batches = result["batches"]
                 total = result["total"]
                 errors = result["errorMessages"]
