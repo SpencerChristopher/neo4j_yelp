@@ -44,7 +44,7 @@ The ETL pipeline expects specific CSV files to be present in the `Data/` directo
 -   `business_categories_small.csv`
 -   `user_friendship.csv`
 
-**Note:** The `Data/` directory itself is not tracked by Git (it's in `.gitignore`). You will need to obtain these CSV files and place them inside the `Data/` directory.
+**Note:** The `Data/` directory itself is not tracked by Git (it's in `.gitignore`). You will need to obtain these CSV files and place them inside the `Data/` directory. [Yelp_Data](https://business.yelp.com/data/resources/open-dataset/)
 
 ### 4. Set up the Neo4j Environment
 
