@@ -22,7 +22,9 @@ def test_pipeline_error_handling():
     with patch('src.pipeline.pd.read_csv') as mock_read_csv, \
             patch('src.pipeline.Neo4jLoader') as mock_loader_class, \
             patch('src.validator.validate_records') as mock_validate, \
-            patch('src.dead_letter_handler.write_dead_letters') as mock_write_dead_letters:
+            patch('src.pipeline.write_dead_letters') as mock_write_dead_letters, \
+            patch('src.pipeline.verify_data_integrity') as mock_verify_integrity, \
+            patch('src.pipeline.validate_review_counts') as mock_validate_review_counts:
 
         # Setup mocks for Neo4jLoader (minimal setup as it's not the focus)
         mock_loader = Mock()
@@ -50,24 +52,30 @@ def test_pipeline_error_handling():
         # We need to configure a phase that actually uses validation
         from src.settings import settings, PhaseConfig
         original_phases = settings.pipeline.phases
+        original_data_dir = settings.DATA_DIR
+
+        temp_dir = Path(tempfile.mkdtemp())
+        settings.DATA_DIR = temp_dir
+        (temp_dir / "mock.csv").write_text("col1\n1\n", encoding="utf-8")
         settings.pipeline.phases = [
-            PhaseConfig(
-                name="Mocked Phase",
-                csv_file_name=Path("mock.csv"),
-                chunk_size=1,
-                validator_func_name="validate_user_data", # Any valid validator name
-                normalizer_func_name="normalize_user_data", # Any valid normalizer name
-                loader_method_name="none", # To avoid hitting loader logic
-                model_name="User",
-                node_label="User",
-                id_property="user_id"
-            )
-        ]
+                PhaseConfig(
+                    name="Mocked Phase",
+                    csv_file_name=Path("mock.csv"),
+                    chunk_size=1,
+                    validator_func_name="validate_user_data", # Any valid validator name
+                    normalizer_func_name="normalize_user_data", # Any valid normalizer name
+                    loader_method_name="load_nodes", # Ensures validation runs
+                    model_name="User",
+                    node_label="User",
+                    id_property="user_id"
+                )
+            ]
 
         pipeline_run(max_batches=1)
 
         # Restore original phases
         settings.pipeline.phases = original_phases
+        settings.DATA_DIR = original_data_dir
 
         # Assert that write_dead_letters was called with the invalid records
         mock_write_dead_letters.assert_called_once_with(
@@ -96,5 +104,4 @@ def test_neo4j_loader_import_failure_handling(monkeypatch):
     # monkeypatch.setattr('src.settings.NEO4J_PASSWORD', 'mock_password')
 
     with pytest.raises(ImportError, match="Mocked Neo4jLoader init failure"):
-        pipeline_run # Re-import to ensure fresh module state if possible
-        run_pipeline(max_batches=1)
+        pipeline_run(max_batches=1)

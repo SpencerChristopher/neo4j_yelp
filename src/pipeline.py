@@ -288,6 +288,7 @@ class PipelineRunner:
 
                     if failed_records:
                         self.stats.failed_batches += 1
+                        self.stats.batch_failures += 1
                     else:
                         self.stats.successful_batches += 1
                         total_nodes_created_for_phase += batch_nodes_created

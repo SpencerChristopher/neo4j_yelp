@@ -50,6 +50,18 @@ class TestNeo4jConnectionAndState:
                 logger.error(f"Failed to check constraints: {e}", exc_info=True)
                 pytest.fail(f"Could not check constraints: {e}")
 
+            # --- Check Required User Uniqueness Constraint Exists ---
+            try:
+                with neo4j_loader.driver.session() as session:
+                    # Neo4j 5.x returns constraint name and description; use description to verify target
+                    result = session.run("SHOW CONSTRAINTS YIELD name, description WHERE description CONTAINS 'User' AND description CONTAINS 'user_id' RETURN count(name) AS count").single()
+                    user_constraint_count = result["count"] if result else 0
+                    assert user_constraint_count >= 1, "Expected a uniqueness constraint on User(user_id)."
+                    logger.info("User user_id uniqueness constraint check passed.")
+            except Exception as e:
+                logger.error(f"Failed to check User(user_id) constraint: {e}", exc_info=True)
+                pytest.fail(f"Could not verify User(user_id) uniqueness constraint: {e}")
+
             # --- Check Database State: Indexes ---
             # Indexes are also created during loader initialization
             try:

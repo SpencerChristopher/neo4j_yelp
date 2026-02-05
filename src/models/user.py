@@ -74,9 +74,13 @@ class User(BaseModel):
                 # Handle "26/02/2014 23:24" format
                 return datetime.strptime(v, "%d/%m/%Y %H:%M")
             except ValueError as e:
-                logger.warning(f"Could not parse yelping_since date: {v} - Error: {e}")
-                # Optionally try other formats or return None
-                return None
+                # Try ISO-like format "2018-01-01 00:00:00"
+                try:
+                    return datetime.strptime(v, "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    logger.warning(f"Could not parse yelping_since date: {v} - Error: {e}")
+                    # Optionally try other formats or return None
+                    return None
         return v
 
     @field_validator("average_stars", mode="after")

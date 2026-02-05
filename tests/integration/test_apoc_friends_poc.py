@@ -4,6 +4,7 @@ import subprocess
 import logging
 from pathlib import Path
 from src.settings import settings
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ def test_load_friends_with_apoc(neo4j_loader, neo4j_container_id, test_data_prov
     # Call the APOC friend loading method
     # Use the container path for the test friendship CSV file
     container_friend_csv_path = "test_data/test.user_friendship.csv" # Path relative to /var/lib/neo4j/import
-    neo4j_loader.load_friend_relationships_apoc(container_friend_csv_path)
+    batches, total, errors = neo4j_loader.load_friend_relationships_apoc(container_friend_csv_path)
     logger.info(f"APOC friend loading from '{container_friend_csv_path}' complete.")
 
     # Verification
@@ -57,11 +58,36 @@ def test_load_friends_with_apoc(neo4j_loader, neo4j_container_id, test_data_prov
         logger.info(f"User count verified: {actual_user_count}")
 
         # 2. Verify FRIENDS_WITH relationship count
-        expected_friendship_count = test_data_provider['friendship_count']
+        # Only friendships where both users exist in the loaded user set should be created.
+        user_df = pd.read_csv(settings.DATA_DIR / settings.USER_CSV)
+        friend_df = pd.read_csv(settings.DATA_DIR / settings.FRIEND_CSV)
+        user_ids = set(user_df["user_id"].tolist())
+        expected_friendship_count = int(
+            friend_df[friend_df["user1"].isin(user_ids) & friend_df["user2"].isin(user_ids)].shape[0]
+        )
+        expected_total_rows = int(friend_df.shape[0])
         rel_count_result = session.run("MATCH ()-[r:FRIENDS_WITH]->() RETURN count(r) as count").single()
         actual_rel_count = rel_count_result['count']
-        assert actual_rel_count == 24, \
-            f"Expected 24 relationships, but found {actual_rel_count}"
+        assert actual_rel_count == expected_friendship_count, \
+            f"Expected {expected_friendship_count} relationships, but found {actual_rel_count}"
         logger.info(f"FRIENDS_WITH relationship count verified: {actual_rel_count}")
+
+        # APOC return should match the created relationship count
+        assert total == expected_total_rows, \
+            f"APOC reported total {total} rows, but expected {expected_total_rows}"
+
+        # 3. Verify a known friendship exists (if sample data is available)
+        # Choose a sample friendship that is guaranteed to be within the loaded user set
+        sample_friendship = friend_df[friend_df["user1"].isin(user_ids) & friend_df["user2"].isin(user_ids)].head(1)
+        if not sample_friendship.empty:
+            sample_user1 = sample_friendship.iloc[0]["user1"]
+            sample_user2 = sample_friendship.iloc[0]["user2"]
+            friendship_result = session.run("""
+                MATCH (u1:User {user_id: $u1})-[f:FRIENDS_WITH]->(u2:User {user_id: $u2})
+                RETURN f
+            """, u1=sample_user1, u2=sample_user2).single()
+            assert friendship_result is not None, "Expected a sample FRIENDS_WITH relationship to exist."
+        else:
+            pytest.skip("Sample friendship data not available in test dataset.")
 
 

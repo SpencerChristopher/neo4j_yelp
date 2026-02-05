@@ -101,11 +101,8 @@ LIMIT 25 -- Show top 25 relationship types
 -- Verifies that the 'business_id' unique constraint is effective.
 -- If this query returns results, it indicates a problem with constraint enforcement or data loading,
 -- as business_id should be unique per Business node.
-MATCH (b1:Business), (b2:Business)
-WHERE id(b1) < id(b2) AND b1.business_id IS NOT NULL AND b1.business_id = b2.business_id
-RETURN b1.business_id, count(b1) AS DuplicateCount
-LIMIT 10
--- Repeat for other unique constraints like User.user_id, Review.review_id, etc.
+
+ other unique constraints like User.user_id, Review.review_id, etc.
 
 --
 

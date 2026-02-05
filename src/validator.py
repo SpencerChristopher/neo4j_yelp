@@ -163,6 +163,22 @@ def validate_category_data(
 
 
 # ============================================================
+# FRIEND VALIDATION
+# ============================================================
+
+def validate_friend_data(
+        raw_records: List[Dict[str, Any]],
+        pydantic_model: Type[BaseModel],
+        entity_name: str,
+        identifier_field: str
+) -> Tuple[List[Friend], List[Dict[str, Any]]]:
+    """
+    Validates raw friendship records (user1, user2) using the Friend model.
+    """
+    return validate_records(raw_records, Friend, "Friend", identifier_field="user1")
+
+
+# ============================================================
 # CITY VALIDATION (Canonical city/state)
 # ============================================================
 

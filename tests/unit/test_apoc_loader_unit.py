@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from src.loader import Neo4jLoader
+from src.settings import settings
 
 
 @pytest.fixture
@@ -35,6 +36,12 @@ class TestNeo4jLoaderApocFriends:
         loader, mock_session = neo4j_loader_mocked_driver
         
         csv_file_name = "user_friendship.csv"
+
+        friend_phase_config = next(
+            (phase for phase in settings.pipeline.phases if phase.loader_method_name == "load_friends_apoc"),
+            None
+        )
+        apoc_batch_size = friend_phase_config.chunk_size if friend_phase_config else 1000
         
         # Configure mock_session.run().single() for this specific test
         mock_run_return_value = MagicMock() # Create a mock for what session.run() returns
@@ -57,9 +64,11 @@ class TestNeo4jLoaderApocFriends:
         assert "callapoc.periodic.iterate" in normalized_actual_query
         assert f"loadcsvwithheadersfrom'file:///{csv_file_name}'asrowreturnrow" in normalized_actual_query.lower()
         assert "match(u1:user{user_id:row.user1})" in normalized_actual_query
+        assert "usingindexu1:user(user_id)" in normalized_actual_query
         assert "match(u2:user{user_id:row.user2})" in normalized_actual_query
+        assert "usingindexu2:user(user_id)" in normalized_actual_query
         assert "merge(u1)-[:friends_with]->(u2)" in normalized_actual_query
-        assert "{batchsize:10000,parallel:true,iteratelist:true,retries:5}" in normalized_actual_query
+        assert f"{{batchsize:{apoc_batch_size},parallel:false,iteratelist:true,retries:5}}" in normalized_actual_query
         assert "yieldbatches,total,errormessagesreturnbatches,total,errormessages" in normalized_actual_query
         # --- END REVISED ASSERTIONS ---
 

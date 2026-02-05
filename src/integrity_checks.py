@@ -10,7 +10,7 @@ def verify_data_integrity(loader: Neo4jLoader):
     """Perform comprehensive data integrity checks."""
     checks = [
         ("Total nodes", "MATCH (n) RETURN count(n) as total_nodes"),
-        ("Total relationships", "MATCH ()-[]-() RETURN count(r) as total_rels"),
+        ("Total relationships", "MATCH ()-[r]-() RETURN count(r) as total_rels"),
 
         # Review count validation
         ("Business review count mismatches", """

@@ -11,6 +11,7 @@ def clean_env():
     original_env = os.environ.copy()
     keys_to_clear = [
         "NEO4J_URI", "NEO4J_USER", "NEO4J_PASSWORD",
+        "NEO4J_READ_USER", "NEO4J_READ_PASSWORD",
         "DATA_DIR", "BUSINESS_CSV", "REVIEW_CSV", "USER_CSV",
         "CATEGORY_CSV", "FRIEND_CSV", "BATCH_SIZE",
         "LOG_FILE", "DEAD_LETTER_FILE"
@@ -47,6 +48,8 @@ def test_env_file_loading(temp_env_file):
 NEO4J_URI=bolt://envfile:7687
 NEO4J_USER=envuser
 NEO4J_PASSWORD=envpass
+NEO4J_READ_USER=envreaduser
+NEO4J_READ_PASSWORD=envreadpass
 BATCH_SIZE=2000
 DATA_DIR=EnvData
 LOG_FILE=logs/env_log.log
@@ -72,6 +75,8 @@ def test_environment_variable_precedence(temp_env_file):
 NEO4J_URI=bolt://envfile:7687
 NEO4J_USER=envuser
 NEO4J_PASSWORD=envpass
+NEO4J_READ_USER=envreaduser
+NEO4J_READ_PASSWORD=envreadpass
 BATCH_SIZE=2000
 """
     temp_env_file.write_text(env_content)

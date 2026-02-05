@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     FRIEND_CSV: Path = Field(Path("user_friendship.csv"), description="Filename for user friendship data")
 
     # ETL Configuration
-    BATCH_SIZE: int = Field(1000, description="Batch size for database operations")
+    BATCH_SIZE: int = Field(500, description="Batch size for database operations")
     LOG_FILE: Path = Field(Path("logs/elt_process.log"), description="Path for the ETL process log file")
     DEAD_LETTER_FILE: Path = Field(Path("logs/dead_letters.jsonl"), description="Path for the dead letter queue file")
 
@@ -103,17 +103,6 @@ class Settings(BaseSettings):
                     node_label="City",
                     id_property="name"
                 ),
-                PhaseConfig( # Users - Moved up
-                    name="Users",
-                    csv_file_name=Path("user_small.csv"),
-                    chunk_size=500,
-                    validator_func_name="validate_user_data",
-                    normalizer_func_name="normalize_user_data",
-                    loader_method_name="load_nodes",
-                    model_name="User",
-                    node_label="User",
-                    id_property="user_id"
-                ),
                 PhaseConfig(
                     name="Businesses with Geographic Relationships",
                     csv_file_name=Path("business_small.csv"),
@@ -137,6 +126,17 @@ class Settings(BaseSettings):
                     id_property="name"
                 ),
                 PhaseConfig(
+                    name="Users",
+                    csv_file_name=Path("user_small.csv"),
+                    chunk_size=500,
+                    validator_func_name="validate_user_data",
+                    normalizer_func_name="normalize_user_data",
+                    loader_method_name="load_nodes",
+                    model_name="User",
+                    node_label="User",
+                    id_property="user_id"
+                ),
+                PhaseConfig(
                     name="Reviews with Immediate User/Business Relationships",
                     csv_file_name=Path("review_small.csv"),
                     chunk_size=300,
@@ -150,7 +150,7 @@ class Settings(BaseSettings):
                 PhaseConfig( # Friend Relationships - Corrected csv_file_name and kept last
                     name="Friend Relationships",
                     csv_file_name=Path("user_friendship.csv"),
-                    chunk_size=100, # Adjusted for better APOC performance expectation
+                    chunk_size=100, # APOC batch size for friend relationships
                     validator_func_name="none",
                     normalizer_func_name="none",
                     loader_method_name="load_friends_apoc",

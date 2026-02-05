@@ -451,9 +451,17 @@ class Neo4jLoader:
                 - total_rels: Total number of relationships created.
                 - error_messages: Any error messages reported by apoc.periodic.iterate.
         """
-        # The CSV file is mounted to /var/lib/neo4j/import in the Docker container
-        # So the path inside Neo4j will be just the filename.
-        neo4j_csv_path = f"file:///{csv_file_name}"
+        # The CSV file is mounted to /var/lib/neo4j/import in the Docker container.
+        # If using tests/data (mounted at /var/lib/neo4j/import/test_data),
+        # include the subdirectory in the Neo4j file URL.
+        data_dir_str = str(settings.DATA_DIR).replace("\\", "/")
+        if data_dir_str.endswith("tests/data") or data_dir_str.endswith("tests/data/"):
+            if str(csv_file_name).replace("\\", "/").startswith("test_data/"):
+                neo4j_csv_path = f"file:///{csv_file_name}"
+            else:
+                neo4j_csv_path = f"file:///test_data/{csv_file_name}"
+        else:
+            neo4j_csv_path = f"file:///{csv_file_name}"
 
         # Dynamically get the chunk_size for the 'Friend Relationships' phase from settings.py
         friend_phase_config = next(
@@ -464,11 +472,14 @@ class Neo4jLoader:
 
         query = f"""
         CALL apoc.periodic.iterate(
-            "LOAD CSV WITH HEADERS FROM '{neo4j_csv_path}' AS row RETURN row",
-            "MATCH (u1:User {{id: row.user1}}) USING INDEX u1:User(id) " +
-            "MATCH (u2:User {{id: row.user2}}) USING INDEX u2:User(id) " +
+            "LOAD CSV WITH HEADERS FROM '{neo4j_csv_path}' AS row
+             WITH row
+             WHERE row.user1 IS NOT NULL AND row.user2 IS NOT NULL AND row.user1 <> row.user2
+             RETURN row",
+            "MATCH (u1:User {{user_id: row.user1}}) USING INDEX u1:User(user_id) " +
+            "MATCH (u2:User {{user_id: row.user2}}) USING INDEX u2:User(user_id) " +
             "MERGE (u1)-[:FRIENDS_WITH]->(u2)",
-            {{batchSize: {apoc_batch_size}, parallel: false, iterateList: true, retries: 5}}
+            {{batchSize: {apoc_batch_size}, parallel: true, iterateList: true, retries: 5}}
         ) YIELD batches, total, errorMessages
         RETURN batches, total, errorMessages
         """

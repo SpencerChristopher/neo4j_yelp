@@ -42,16 +42,13 @@ def clear_database():
                 return
             
             print("Deleting all nodes and relationships...")
-            # Use apoc.periodic.iterate for batching, which is safer for large databases
-            # However, for a test setup, a simple DETACH DELETE is usually fine.
-            # Use apoc.periodic.iterate for batching, which is safer for large databases
-            # This will delete nodes in batches, preventing memory exhaustion.
-            # Using a batch size of 1000 nodes, committing every 1000 operations.
+            # Use apoc.periodic.iterate for batching to handle large databases safely.
+            # Stream IDs to reduce memory pressure, and delete in larger batches.
             session.run("""
                 CALL apoc.periodic.iterate(
-                    "MATCH (n) RETURN n",
-                    "DETACH DELETE n",
-                    {batchSize: 1000, parallel: false, iterateList: true}
+                    "MATCH (n) RETURN id(n) AS id",
+                    "MATCH (n) WHERE id(n) = id DETACH DELETE n",
+                    {batchSize: 10000, parallel: false, iterateList: true, retries: 5}
                 ) YIELD batches, total
                 RETURN batches, total
             """)
@@ -59,7 +56,7 @@ def clear_database():
             # Verify deletion
             result = session.run("MATCH (n) RETURN count(n) as count").single()
             if result['count'] == 0:
-                print("\n🎉 Database cleared successfully.")
+                print("\nDatabase cleared successfully.")
             else:
                 print(f"\n!!! Warning: {result['count']} nodes still remain after clearing.")
 
