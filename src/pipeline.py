@@ -8,7 +8,7 @@ import gc
 import importlib
 from pathlib import Path
 
-from src.loader import Neo4jLoader
+from src.loader import Neo4jLoader, ApocLoadError
 from neo4j.exceptions import ClientError
 from src.settings import settings, PhaseConfig
 from src.integrity_checks import verify_data_integrity, validate_review_counts
@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 class PipelineConfigError(Exception):
     """Custom exception for pipeline configuration errors."""
+    pass
+
+
+class PipelineFatalError(Exception):
+    """Custom exception for fatal errors that require pipeline termination."""
     pass
 
 
@@ -181,6 +186,10 @@ class PipelineRunner:
             if errors:
                 failed_records.append({"error_type": "APOC_ERROR", "message": errors})
 
+        except ApocLoadError as e:
+            logger.critical(f"FATAL: APOC friend loading for {phase_config.name} failed after retries: {e}", exc_info=True)
+            self.stats.batch_failures += 1
+            raise PipelineFatalError(f"APOC friend loading failed: {e}")
         except Exception as e:
             logger.error(f"Failed server-side APOC loading for {phase_config.name}: {e}", exc_info=True)
             failed_records.append({"error_type": "EXCEPTION", "message": str(e)})
@@ -326,8 +335,10 @@ class PipelineRunner:
                 logger.warning("Validating review counts...")
                 validate_review_counts(self.loader, sample_size=1000)
 
+        except PipelineFatalError as e:
+            logger.critical(f"Pipeline terminated early due to fatal error: {e}")
         except Exception as e:
-            logger.critical(f"FATAL: Pipeline failed with error: {e}", exc_info=True)
+            logger.critical(f"FATAL: Pipeline failed with unexpected error: {e}", exc_info=True)
             raise
 
         finally:
@@ -369,8 +380,6 @@ class PipelineRunner:
             logger.warning("ETL pipeline finished successfully")
 
 
-
-
 def run_pipeline(max_batches: Optional[int] = None):
     """Main ETL pipeline orchestrated by PipelineRunner."""
     logger.warning("Starting Yelp ETL pipeline with optimal loading order (orchestrated by PipelineRunner)")
@@ -380,6 +389,8 @@ def run_pipeline(max_batches: Optional[int] = None):
         loader = Neo4jLoader()
         runner = PipelineRunner(loader, stats)
         runner.run_pipeline(max_batches)
+    except PipelineFatalError as e:
+        logger.critical(f"ETL pipeline terminated early: {e}")
     except Exception as e:
         logger.critical(f"FATAL: Pipeline failed during initialization or execution: {e}", exc_info=True)
         raise

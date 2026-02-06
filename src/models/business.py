@@ -169,7 +169,8 @@ class Business(BaseModel):
 
 
         if not is_valid:
-            raise ValueError(f"Postal code '{v}' does not match standard US (5 or 9 digit) or Canadian (A1A1A1) formats.")
+            logger.warning(f"Invalid postal code format: '{v}'. Setting to None.")
+            return None
 
         return v
 

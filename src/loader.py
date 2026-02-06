@@ -17,6 +17,15 @@ from src.dead_letter_handler import write_batch_failure_dead_letter
 logger = logging.getLogger(__name__)
 
 
+class ApocLoadError(Exception):
+    """Base exception for APOC load failures."""
+    pass
+
+class ApocLoadTimeoutError(ApocLoadError):
+    """Custom exception for APOC load timeouts after retries."""
+    pass
+
+
 class Neo4jLoader:
     def ipv4_resolver(self, address):
         """
@@ -315,8 +324,10 @@ class Neo4jLoader:
                 UNWIND $data AS r
                 MATCH (city:City {name: r.from_node_id_value, state_code: r.from_node_id_aux_value})
                 MERGE (state:State {code: r.to_node_id_value})
-                OPTIONAL MATCH (city)-[old:IN]->(s) WHERE s <> state
-                DELETE old
+                WITH city, state, r
+                OPTIONAL MATCH (city)-[old:IN]->(s)
+                WHERE id(s) <> id(state)
+                FOREACH (o IN CASE WHEN old IS NOT NULL THEN [old] ELSE [] END | DELETE o)
                 MERGE (city)-[isi:IN]->(state)
                 SET city += r.from_node_properties, state += r.to_node_properties, isi += r.properties
             """,
@@ -409,7 +420,7 @@ class Neo4jLoader:
             elapsed = time.time() - start_time
             if elapsed > timeout_seconds:
                 session.run("CALL apoc.periodic.cancel($name)", name=job_name)
-                raise TimeoutError(f"APOC job '{job_name}' timed out after {timeout_seconds} seconds.")
+                raise ApocLoadTimeoutError(f"APOC job '{job_name}' timed out after {timeout_seconds} seconds.")
 
             status_rows = session.run("CALL apoc.periodic.list()").data()
             status = next((row for row in status_rows if row.get("name") == job_name), None)
@@ -435,11 +446,21 @@ class Neo4jLoader:
 
             time.sleep(poll_interval_seconds)
 
+    @retry(
+        wait=wait_exponential(multiplier=1, min=settings.APOC_FRIENDS_TIMEOUT, max=settings.APOC_FRIENDS_TIMEOUT * 2),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception_type(ApocLoadTimeoutError),
+        reraise=True,
+        before_sleep=lambda retry_state: logger.warning(
+            f"Retrying APOC friend load after {retry_state.attempt_number} attempts due to timeout. "
+            f"Sleeping {retry_state.next_action.sleep:.2f} seconds."
+        )
+    )
     def load_friend_relationships_apoc(
         self,
         csv_file_name: str,
         async_mode: bool = True,
-        timeout_seconds: int = 300,
+        timeout_seconds: int = settings.APOC_FRIENDS_TIMEOUT, # Use setting for individual job timeout
         poll_interval_seconds: int = 5
     ) -> Tuple[int, int, List[str]]:
         """
@@ -447,16 +468,20 @@ class Neo4jLoader:
         This method offloads matching and relationship creation to the Neo4j server,
         optimizing for large relationship files like user_friendship.csv.
 
+        Includes a retry mechanism (3 attempts) for timeouts via tenacity.
+
         Args:
             csv_file_name: The name of the CSV file (e.g., "user_friendship.csv")
                            which must be accessible in Neo4j's import directory.
                            Assumes the CSV has 'user1' and 'user2' headers.
+            async_mode: If True, uses apoc.periodic.submit and polls for job completion.
+                        If False, runs apoc.periodic.iterate directly.
+            timeout_seconds: The maximum time in seconds to wait for an individual APOC job run.
+            poll_interval_seconds: How often to poll the APOC job status.
 
-        Returns:
-            A tuple containing:
-                - total_batches: Number of batches processed by apoc.periodic.iterate.
-                - total_rels: Total number of relationships created (best-effort for async).
-                - error_messages: Any error messages reported by apoc.periodic.iterate.
+
+
+
         """
         neo4j_csv_path = settings.neo4j_file_url(csv_file_name)
 

@@ -17,7 +17,7 @@ __pycache__/
 *.pdf
 project_outline.md
 *.zip
-
+SESSION_NOTES.md
 # Data files (now tracked)
 tests/data/
 

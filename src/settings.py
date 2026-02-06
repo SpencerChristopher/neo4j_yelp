@@ -45,6 +45,7 @@ class Settings(BaseSettings):
 
     # ETL Configuration
     BATCH_SIZE: int = Field(500, description="Batch size for database operations")
+    APOC_FRIENDS_TIMEOUT: int = Field(300, description="Timeout in seconds for APOC friend loading job.")
     LOG_FILE: Path = Field(Path("logs/elt_process.log"), description="Path for the ETL process log file")
     DEAD_LETTER_FILE: Path = Field(Path("logs/dead_letters.jsonl"), description="Path for the dead letter queue file")
 

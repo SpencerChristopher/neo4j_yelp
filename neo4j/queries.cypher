@@ -128,3 +128,52 @@ MATCH (p1:PostalCode), (p2:PostalCode)
 WHERE id(p1) < id(p2) AND p1.code IS NOT NULL AND p1.code = p2.code
 RETURN p1.code, count(p1) AS DuplicateCount
 LIMIT 10
+--
+-- --- NEW VALIDATION QUERIES ---
+
+-- 14. Cities with two or more states
+-- Finds City nodes connected to more than one State node.
+-- This should not return any results if the data is clean.
+MATCH (c:City)-[:IN]->(s:State)
+WITH c, count(s) AS state_count
+WHERE state_count > 1
+RETURN c.name, c.state_code, state_count
+ORDER BY state_count DESC;
+
+--
+
+-- 15. Orphaned postcodes
+-- Finds PostalCode nodes that are not connected to any Business node.
+-- This can help identify postal codes that were loaded but not linked.
+MATCH (pc:PostalCode)
+WHERE NOT (pc)<-[:CLAIMS_POSTAL_CODE]-(:Business)
+RETURN pc.code, pc.country;
+
+--
+
+-- 16. Duplicated postal codes
+-- Finds PostalCode nodes where the 'code' property is not unique.
+-- This can help identify issues with data normalization or loading.
+MATCH (pc:PostalCode)
+WITH pc.code AS postcode, collect(pc) AS nodes
+WHERE size(nodes) > 1
+RETURN postcode, size(nodes) AS duplicate_count
+ORDER BY duplicate_count DESC;
+
+--
+
+-- 17. States with orphaned cities
+-- Finds State nodes that are connected to City nodes,
+-- but those City nodes are not connected to any Business nodes.
+MATCH (s:State)<-[:IN]-(c:City)
+WHERE NOT (c)<-[:LOCATED_NEAR]-(:Business)
+RETURN s.code AS state_code, collect(c.name) AS orphaned_cities;
+
+--
+
+-- 18. Claimed but orphaned states
+-- Finds State nodes that are claimed by a Business but have no City nodes.
+-- This could indicate an issue with the City-State linking.
+MATCH (s:State)<-[:CLAIMS_STATE]-(:Business)
+WHERE NOT (s)<-[:IN]-(:City)
+RETURN DISTINCT s.code AS state_code;
